@@ -72,8 +72,9 @@ Closing the main window keeps Vibra running in the tray. Right-click the tray ic
 A monitor shows a game's level while that game is what you're looking at there:
 
 - a fullscreen or borderless game keeps its monitor even while you click around on another monitor;
-- a windowed game (a launcher or lobby, like League's client) keeps its monitor as long as nothing covers most of it, including while you use Vibra or another monitor;
-- clicking into another app on the same monitor, or alt-tabbing to it, switches that monitor back to its desktop level at the same moment.
+- a windowed game keeps its monitor as long as nothing covers most of it, including while you use Vibra or another monitor;
+- clicking into another app on the same monitor, or alt-tabbing to it, switches that monitor back to its desktop level at the same moment;
+- launchers and game clients (Steam, Epic, Battle.net, Riot Client, League's lobby client) are not games and stay at the desktop level. Only the match itself is boosted.
 
 ### Your NVIDIA Control Panel setting (e.g. 70%)
 

@@ -386,7 +386,12 @@ namespace Vibra.UI
                 return;
             if (profile.OtherExes != null && profile.OtherExes.Count == 0)
                 profile.OtherExes = null;
-            store.Settings.AddGame(profile);
+            if (!store.Settings.AddGame(profile))
+            {
+                // Already there (e.g. the exe picked was the game's own launcher): just show it.
+                grid.Selected = store.Settings.FindGame(profile.Exe) ?? grid.Selected;
+                return;
+            }
             store.SaveSoon();
             if (window != IntPtr.Zero)
                 icons.CaptureFromWindow(profile, window);

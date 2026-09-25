@@ -98,15 +98,15 @@ namespace Vibra.Tests
             Assert.Same(chat, owners["DISPLAY2"]);
         }
 
-        private static bool IsGame(WindowInfo w) => w.ExeName == "LeagueClientUx.exe" || w.ExeName == "cs2.exe";
+        private static bool IsGame(WindowInfo w) => w.ExeName == "Balatro.exe" || w.ExeName == "cs2.exe";
 
         [Fact]
         public void Windowed_game_keeps_its_monitor_while_you_use_the_other_one()
         {
-            // League's client is a 1280x720 window on the right monitor; focus is on the left one.
+            // A windowed game (1280x720) on the right monitor; focus is on the left one.
             var right = new MonitorArea("DISPLAY2", new ScreenRect(2560, 0, 5120, 1440));
             var browser = Window("chrome.exe", new ScreenRect(0, 0, 2560, 1400), foreground: true);
-            var client = Window("LeagueClientUx.exe", new ScreenRect(3200, 300, 4480, 1020));
+            var client = Window("Balatro.exe", new ScreenRect(3200, 300, 4480, 1020));
 
             var owners = ScreenDecider.FindOwners(new List<MonitorArea> { Left, right }, new[] { browser, client }, IsGame);
 
@@ -118,7 +118,7 @@ namespace Vibra.Tests
         public void Windowed_game_keeps_its_monitor_while_vibra_has_focus()
         {
             // Vibra's own window is never passed in, so nothing is focused from the decider's view.
-            var client = Window("LeagueClientUx.exe", new ScreenRect(600, 300, 1880, 1020));
+            var client = Window("Balatro.exe", new ScreenRect(600, 300, 1880, 1020));
 
             var owners = ScreenDecider.FindOwners(Monitors, new[] { client }, IsGame);
 
@@ -129,7 +129,7 @@ namespace Vibra.Tests
         public void Windowed_game_mostly_covered_by_another_window_does_not_own_its_monitor()
         {
             var explorer = Window("explorer.exe", new ScreenRect(500, 250, 1700, 1000));
-            var client = Window("LeagueClientUx.exe", new ScreenRect(600, 300, 1880, 1020));
+            var client = Window("Balatro.exe", new ScreenRect(600, 300, 1880, 1020));
 
             var owners = ScreenDecider.FindOwners(Monitors, new[] { explorer, client }, IsGame);
 
@@ -140,7 +140,7 @@ namespace Vibra.Tests
         public void Focused_app_beside_a_windowed_game_takes_the_monitor()
         {
             var notes = Window("notepad.exe", new ScreenRect(1900, 100, 2500, 700), foreground: true);
-            var client = Window("LeagueClientUx.exe", new ScreenRect(100, 100, 1380, 820));
+            var client = Window("Balatro.exe", new ScreenRect(100, 100, 1380, 820));
 
             var owners = ScreenDecider.FindOwners(Monitors, new[] { notes, client }, IsGame);
 

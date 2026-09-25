@@ -52,6 +52,12 @@ namespace Vibra.Core
 
             public string Name { get; }
             public string[] Exes { get; }
+
+            /// <summary>
+            /// The game's own launcher/client processes (e.g. League's lobby). They are not the game:
+            /// never boosted, auto-added or offered in the Add menu.
+            /// </summary>
+            public string[] Launchers { get; set; } = new string[0];
         }
 
         public static readonly Entry[] All =
@@ -61,7 +67,10 @@ namespace Vibra.Core
             new Entry("Fortnite", "FortniteClient-Win64-Shipping.exe"),
             new Entry("Apex Legends", "r5apex.exe", "r5apex_dx12.exe"),
             new Entry("Overwatch", "Overwatch.exe"),
-            new Entry("League of Legends", "League of Legends.exe", "LeagueClientUx.exe", "LeagueClient.exe"),
+            new Entry("League of Legends", "League of Legends.exe")
+            {
+                Launchers = new[] { "LeagueClientUx.exe", "LeagueClient.exe", "LeagueClientUxRender.exe" },
+            },
             new Entry("Rainbow Six Siege", "RainbowSix.exe", "RainbowSix_Vulkan.exe", "RainbowSix_DX11.exe"),
             new Entry("Rocket League", "RocketLeague.exe"),
             new Entry("Call of Duty", "cod.exe", "ModernWarfare.exe", "BlackOpsColdWar.exe"),
@@ -98,6 +107,16 @@ namespace Vibra.Core
             return All.FirstOrDefault(g => g.Exes.Any(e => GameMatcher.IsExactMatch(e, exe)))
                 ?? All.FirstOrDefault(g => g.Exes.Any(e => GameMatcher.Matches(e, exe)));
         }
+
+        /// <summary>The known game whose launcher/client this executable is, or null.</summary>
+        public static Entry FindByLauncher(string exe)
+        {
+            if (string.IsNullOrEmpty(exe))
+                return null;
+            return All.FirstOrDefault(g => g.Launchers.Any(l => GameMatcher.IsExactMatch(l, exe)));
+        }
+
+        public static bool IsLauncher(string exe) => FindByLauncher(exe) != null;
 
         /// <summary>Unreal Engine games ship their game process as "Name-Win64-Shipping.exe".</summary>
         public static bool IsUnrealShippingExe(string exe)
@@ -146,7 +165,7 @@ namespace Vibra.Core
         /// <summary>Identifies a running executable as a game, or returns null if it does not look like one.</summary>
         public DetectedGame Identify(string exe)
         {
-            if (string.IsNullOrEmpty(exe))
+            if (string.IsNullOrEmpty(exe) || KnownGames.IsLauncher(exe))
                 return null;
             if (byExe.TryGetValue(exe, out var installed))
                 return installed;

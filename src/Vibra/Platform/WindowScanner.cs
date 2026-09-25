@@ -211,7 +211,7 @@ namespace Vibra.Platform
         }
 
         private static bool IsGameCandidate(string exe) =>
-            !string.IsNullOrEmpty(exe) && !NotGames.Contains(exe) && !SeeThroughProcesses.Contains(exe);
+            !string.IsNullOrEmpty(exe) && !NotGames.Contains(exe) && !SeeThroughProcesses.Contains(exe) && !KnownGames.IsLauncher(exe);
 
         private static bool IsCloaked(IntPtr hwnd) =>
             NativeMethods.DwmGetWindowAttribute(hwnd, NativeMethods.DWMWA_CLOAKED, out int cloaked, sizeof(int)) == 0 && cloaked != 0;

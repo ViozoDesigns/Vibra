@@ -100,12 +100,19 @@ namespace Vibra.Core
             }
         }
 
-        /// <summary>Adding a game by hand lifts any earlier "never auto-add" for its executables.</summary>
-        public void AddGame(GameProfile game)
+        /// <summary>
+        /// Adds a game; adding by hand lifts any earlier "never auto-add" for its executables.
+        /// Returns false if the game is already in the list.
+        /// </summary>
+        public bool AddGame(GameProfile game)
         {
+            PointAtGameInsteadOfLauncher(game);
+            if (Games.Any(g => g.Matches(game.Exe, exactOnly: true)))
+                return false;
             Games.Add(game);
             var exes = new HashSet<string>(game.AllExes, StringComparer.OrdinalIgnoreCase);
             IgnoredExes.RemoveAll(exes.Contains);
+            return true;
         }
 
         public DisplayProfile FindDisplay(string id) =>
@@ -121,17 +128,24 @@ namespace Vibra.Core
             foreach (var game in Games)
             {
                 game.Exe = GameMatcher.FileName(game.Exe);
+                PointAtGameInsteadOfLauncher(game);
                 if (string.IsNullOrWhiteSpace(game.Name))
                     game.Name = GameMatcher.DisplayNameFor(game.Exe);
                 game.Vibrance = game.Vibrance == 0 ? VibranceScale.DefaultGamePercent : VibranceScale.Clamp(game.Vibrance);
                 game.OtherExes = game.OtherExes?
                     .Where(e => !string.IsNullOrWhiteSpace(e))
                     .Select(GameMatcher.FileName)
+                    .Where(e => !KnownGames.IsLauncher(e) && !string.Equals(e, game.Exe, StringComparison.OrdinalIgnoreCase))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
                 if (game.OtherExes != null && game.OtherExes.Count == 0)
                     game.OtherExes = null;
             }
+
+            // Two entries can end up on the same game (e.g. one made for League's client, one for
+            // the match); keep the first.
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            Games = Games.Where(g => seen.Add(g.Exe)).ToList();
 
             NewGameVibrance = NewGameVibrance == 0 ? VibranceScale.DefaultGamePercent : VibranceScale.Clamp(NewGameVibrance);
             IgnoredExes = (IgnoredExes ?? new List<string>()).Where(e => !string.IsNullOrWhiteSpace(e)).ToList();
@@ -148,6 +162,20 @@ namespace Vibra.Core
             HotkeyIncrease = NormalizeHotkey(HotkeyIncrease, DefaultHotkeyIncrease);
             HotkeyDecrease = NormalizeHotkey(HotkeyDecrease, DefaultHotkeyDecrease);
             HotkeyPause = NormalizeHotkey(HotkeyPause, "None");
+        }
+
+        /// <summary>
+        /// An entry made for a game's launcher/client (easy to pick by mistake, it's often titled like
+        /// the game) is moved onto the game itself, keeping its level.
+        /// </summary>
+        private static void PointAtGameInsteadOfLauncher(GameProfile game)
+        {
+            var known = KnownGames.FindByLauncher(game.Exe);
+            if (known == null)
+                return;
+            game.Exe = known.Exes[0];
+            game.OtherExes = known.Exes.Skip(1).Concat(game.OtherExes ?? Enumerable.Empty<string>()).ToList();
+            game.IconPath = null;
         }
 
         private static string NormalizeHotkey(string text, string fallback)

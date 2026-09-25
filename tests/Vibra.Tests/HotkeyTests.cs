@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using Vibra.Core;
 using Xunit;
 
@@ -71,23 +72,45 @@ namespace Vibra.Tests
     public class KnownGameGroupTests
     {
         [Fact]
-        public void League_client_and_match_are_the_same_game()
+        public void League_client_is_not_the_game()
         {
             var settings = new AppSettings();
             settings.AddGame(new GameProfile { Exe = "League of Legends.exe", Name = "League of Legends", Vibrance = 85 });
 
-            Assert.Equal("League of Legends", settings.FindGame("LeagueClientUx.exe")?.Name);
             Assert.Equal("League of Legends", settings.FindGame("League of Legends.exe")?.Name);
+            Assert.Null(settings.FindGame("LeagueClientUx.exe"));
+            Assert.Null(GameCatalog.Empty.Identify("LeagueClientUx.exe"));
+            Assert.Equal("League of Legends", GameCatalog.Empty.Identify("League of Legends.exe")?.Name);
         }
 
         [Fact]
-        public void Works_the_other_way_round_too()
+        public void Entry_saved_for_the_client_moves_to_the_match_and_keeps_its_level()
+        {
+            var settings = SettingsSerializer.FromJson("{\"Games\":[{\"Exe\":\"LeagueClientUx.exe\",\"Name\":\"League of Legends\",\"Vibrance\":90}]}");
+
+            var game = settings.Games.Single();
+            Assert.Equal("League of Legends.exe", game.Exe);
+            Assert.Equal(90, game.Vibrance);
+            Assert.Null(settings.FindGame("LeagueClientUx.exe"));
+        }
+
+        [Fact]
+        public void Client_and_match_entries_collapse_into_one()
+        {
+            var settings = SettingsSerializer.FromJson(
+                "{\"Games\":[{\"Exe\":\"League of Legends.exe\",\"Vibrance\":95},{\"Exe\":\"LeagueClientUx.exe\",\"Vibrance\":70}]}");
+
+            var game = settings.Games.Single();
+            Assert.Equal(95, game.Vibrance);
+        }
+
+        [Fact]
+        public void Adding_the_client_by_hand_adds_the_game_instead()
         {
             var settings = new AppSettings();
-            settings.AddGame(new GameProfile { Exe = "LeagueClientUx.exe", Name = "League of Legends", Vibrance = 85 });
-
-            Assert.Equal("League of Legends", settings.FindGame("League of Legends.exe")?.Name);
-            Assert.Null(settings.FindGame("cs2.exe"));
+            Assert.True(settings.AddGame(new GameProfile { Exe = "LeagueClientUx.exe", Name = "League of Legends", Vibrance = 80 }));
+            Assert.Equal("League of Legends.exe", settings.Games.Single().Exe);
+            Assert.False(settings.AddGame(new GameProfile { Exe = "League of Legends.exe", Name = "League", Vibrance = 80 }));
         }
 
         [Fact]
