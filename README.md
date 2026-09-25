@@ -94,9 +94,21 @@ Anything else can be added from *Other running apps*, by browsing to its `.exe`,
 
 ## Getting the exe
 
-Every push is built on GitHub Actions (Windows). Open the **Actions** tab → latest **build** run → download the **Vibra** artifact (contains `Vibra.exe` and `Vibra.exe.config`).
+Download `Vibra.exe` from the [latest release](https://github.com/ViozoDesigns/Vibra/releases/latest). Put it in a folder you'll keep, e.g. `C:\Tools\Vibra\`, and run it. Windows may show "Windows protected your PC" because the exe isn't signed; click **More info → Run anyway**.
 
-Or build it yourself (Windows, .NET 8 SDK):
+Every green build of the default branch is published as a new release automatically.
+
+### Updates
+
+Vibra updates itself. It checks the latest release in the background, downloads a newer `Vibra.exe`, and swaps it in the next time no game is on screen, so a restart never blinks your colors mid-game. It restarts to the tray and tells you it updated. You can switch this off or check manually under **Settings → General**.
+
+This needs the exe's folder to be writable (not `Program Files`) and the releases to be downloadable without signing in, i.e. a public repository.
+
+If you start a different version of Vibra while another is running (e.g. a fresh download), the new one replaces the running one.
+
+### Building it yourself
+
+Windows, .NET 8 SDK:
 
 ```
 dotnet build src/Vibra/Vibra.csproj -c Release -o out

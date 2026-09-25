@@ -5,9 +5,14 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write # publish releases, which the in-app updater downloads
+
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      VERSION: 0.1.${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
 
@@ -19,7 +24,7 @@ jobs:
         run: dotnet test tests/Vibra.Tests/Vibra.Tests.csproj -c Release
 
       - name: Build Vibra.exe
-        run: dotnet build src/Vibra/Vibra.csproj -c Release -o out
+        run: dotnet build src/Vibra/Vibra.csproj -c Release -o out -p:Version=${{ env.VERSION }}
 
       - name: Smoke test (opens both windows, runs 15 s, no errors logged)
         shell: pwsh
@@ -69,3 +74,16 @@ jobs:
           name: screenshot
           path: screenshot.png
           if-no-files-found: ignore
+
+      # Every green build of the default branch becomes a release; Vibra updates itself from the latest one.
+      - name: Publish release
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ github.event.head_commit.message }}
+        run: |
+          Set-Content -Path notes.md -Value $env:NOTES
+          gh release create "v$env:VERSION" out/Vibra.exe out/Vibra.exe.config `
+            --repo "${{ github.repository }}" --target "${{ github.sha }}" `
+            --title "Vibra $env:VERSION" --notes-file notes.md --latest

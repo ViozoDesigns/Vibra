@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
@@ -14,8 +15,6 @@ namespace Vibra.App
     /// <summary>Owns the tray icon, the engine and the windows for the lifetime of the process.</summary>
     internal sealed class VibraApp : ApplicationContext
     {
-        public const string ShowEventName = @"Local\Vibra.ShowWindow";
-
         private const int HotkeyIncreaseId = 1;
         private const int HotkeyDecreaseId = 2;
         private const int HotkeyPauseId = 3;
@@ -29,8 +28,11 @@ namespace Vibra.App
         private readonly MessageWindow messages;
         private readonly NotifyIcon tray;
         private readonly ToolStripMenuItem pauseItem;
+        private readonly Updater updater;
         private readonly EventWaitHandle showEvent;
         private readonly RegisteredWaitHandle showWait;
+        private readonly EventWaitHandle quitEvent;
+        private readonly RegisteredWaitHandle quitWait;
         private readonly SynchronizationContext ui;
         private readonly System.Windows.Forms.Timer scanDelay = new System.Windows.Forms.Timer { Interval = LibraryScanDelayMs };
         private readonly List<int> registeredHotkeys = new List<int>();
@@ -40,7 +42,7 @@ namespace Vibra.App
         private bool scanRunning;
         private bool shuttingDown;
 
-        public VibraApp(bool startHidden, bool openSettings = false)
+        public VibraApp(bool startHidden, bool openSettings = false, bool justUpdated = false)
         {
             Current = this;
             ui = SynchronizationContext.Current;
@@ -56,6 +58,7 @@ namespace Vibra.App
             messages.SessionEnding += OnSessionEnding;
             messages.HotkeyPressed += OnHotkey;
             messages.ShowRequested += ShowMainWindow;
+            messages.QuitRequested += Shutdown;
 
             pauseItem = new ToolStripMenuItem("Pause", null, (s, e) => engine.SetPaused(!engine.IsPaused));
             tray = new NotifyIcon
@@ -76,10 +79,18 @@ namespace Vibra.App
             RegisterHotkeys();
             UpdateTray();
 
-            // A second launch (e.g. double-clicking the exe again) asks this instance to show itself.
-            showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
+            // A second launch of the same exe asks this instance to show itself; a different
+            // version (new download or update) asks it to quit so it can take over.
+            showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, RunningInstance.ShowEventName);
             showWait = ThreadPool.RegisterWaitForSingleObject(showEvent, (state, timedOut) =>
                 NativeMethods.PostMessage(messages.Handle, MessageWindow.ShowRequestMessage, IntPtr.Zero, IntPtr.Zero), null, -1, false);
+            quitEvent = new EventWaitHandle(false, EventResetMode.AutoReset, RunningInstance.QuitEventName);
+            quitWait = ThreadPool.RegisterWaitForSingleObject(quitEvent, (state, timedOut) =>
+                NativeMethods.PostMessage(messages.Handle, MessageWindow.QuitRequestMessage, IntPtr.Zero, IntPtr.Zero), null, -1, false);
+
+            // Updates install only while no game is on screen, so a restart never blinks the colors mid-game.
+            updater = new Updater(store, () => engine.LiveGames.Count == 0 && settingsForm == null, RestartForUpdate);
+            updater.Start();
 
             Autostart.RepairPath();
 
@@ -94,6 +105,8 @@ namespace Vibra.App
                 ShowMainWindow();
             if (openSettings)
                 OpenSettings();
+            if (justUpdated)
+                tray.ShowBalloonTip(4000, $"Vibra updated to {Updater.CurrentVersionText}", "Your games and settings are unchanged.", ToolTipIcon.None);
         }
 
         public static VibraApp Current { get; private set; }
@@ -101,6 +114,7 @@ namespace Vibra.App
         private void OnEngineStateChanged()
         {
             UpdateTray();
+            updater?.TryInstall();
             // Games found some other way than a library scan get their icon from their window.
             foreach (var game in engine.LiveGames.Values.Distinct())
                 icons.CaptureFromWindow(game, engine.WindowOf(game));
@@ -157,7 +171,7 @@ namespace Vibra.App
 
             // Global shortcuts would swallow the keys the user presses to set new ones.
             UnregisterHotkeys();
-            settingsForm = new SettingsForm(engine, store, IsHotkeyAvailable);
+            settingsForm = new SettingsForm(engine, store, IsHotkeyAvailable, updater);
             settingsForm.FormClosed += (s, e) =>
             {
                 settingsForm = null;
@@ -306,6 +320,22 @@ namespace Vibra.App
 
         // ------------------------------------------------------------------ Shutdown
 
+        /// <summary>The new exe is in place: start it and leave (it waits for this process to exit).</summary>
+        private void RestartForUpdate()
+        {
+            bool windowOpen = mainForm != null && !mainForm.IsDisposed && mainForm.Visible;
+            try
+            {
+                Process.Start(Application.ExecutablePath, windowOpen ? "--updated" : "--updated --minimized");
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Could not start the updated Vibra", ex);
+                return;
+            }
+            Shutdown();
+        }
+
         private void OnSessionEnding()
         {
             // Windows is logging off or shutting down: leave the desktop colors as the user set them.
@@ -349,6 +379,9 @@ namespace Vibra.App
                 UnregisterHotkeys();
                 showWait.Unregister(null);
                 showEvent.Dispose();
+                quitWait.Unregister(null);
+                quitEvent.Dispose();
+                updater.Dispose();
                 scanDelay.Dispose();
                 engine.Dispose(); // restores desktop vibrance
                 store.Dispose();

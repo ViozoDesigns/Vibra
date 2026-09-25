@@ -61,6 +61,7 @@ namespace Vibra.Core
         [DataMember(Order = 10)] public string HotkeyIncrease { get; set; } = DefaultHotkeyIncrease;
         [DataMember(Order = 11)] public string HotkeyDecrease { get; set; } = DefaultHotkeyDecrease;
         [DataMember(Order = 12)] public string HotkeyPause { get; set; } = "None";
+        [DataMember(Order = 13)] public bool DisableAutoUpdate { get; set; }
 
         public const string DefaultHotkeyIncrease = "Ctrl+Alt+PgUp";
         public const string DefaultHotkeyDecrease = "Ctrl+Alt+PgDn";

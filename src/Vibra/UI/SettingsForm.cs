@@ -17,6 +17,7 @@ namespace Vibra.UI
         private readonly VibranceEngine engine;
         private readonly SettingsStore store;
         private readonly Func<Hotkey, bool> isHotkeyAvailable;
+        private readonly Updater updater;
 
         private readonly Panel content = new Panel { AutoScroll = true };
         private readonly DisplayMap displayMap = new DisplayMap();
@@ -29,14 +30,18 @@ namespace Vibra.UI
         private readonly Stepper stepStepper = new Stepper(1, 20);
         private readonly Label hotkeyError = new Label();
         private readonly CheckBox autostartCheck = new CheckBox();
+        private readonly CheckBox autoUpdateCheck = new CheckBox();
+        private readonly Label versionLabel = new Label();
+        private readonly FlatButton checkUpdatesButton = new FlatButton();
         private readonly FlatButton closeButton = new FlatButton();
         private bool loading;
 
-        public SettingsForm(VibranceEngine engine, SettingsStore store, Func<Hotkey, bool> isHotkeyAvailable)
+        public SettingsForm(VibranceEngine engine, SettingsStore store, Func<Hotkey, bool> isHotkeyAvailable, Updater updater)
         {
             this.engine = engine;
             this.store = store;
             this.isHotkeyAvailable = isHotkeyAvailable;
+            this.updater = updater;
             var settings = store.Settings;
 
             SuspendLayout();
@@ -103,6 +108,25 @@ namespace Vibra.UI
             autostartCheck.Checked = Autostart.IsEnabled;
             autostartCheck.CheckedChanged += OnAutostartChanged;
 
+            // Updates
+            SetupCheck(autoUpdateCheck, "Update automatically");
+            autoUpdateCheck.Checked = !settings.DisableAutoUpdate;
+            autoUpdateCheck.CheckedChanged += (s, e) =>
+            {
+                store.Settings.DisableAutoUpdate = !autoUpdateCheck.Checked;
+                store.SaveSoon();
+            };
+            versionLabel.ForeColor = Theme.SubText;
+            versionLabel.Font = Theme.Small;
+            versionLabel.AutoSize = false;
+            versionLabel.AutoEllipsis = true;
+            versionLabel.TextAlign = ContentAlignment.MiddleLeft;
+            checkUpdatesButton.Text = "Check now";
+            checkUpdatesButton.Font = Theme.Body;
+            checkUpdatesButton.Click += (s, e) => updater.CheckNow();
+            updater.StatusChanged += OnUpdaterStatusChanged;
+            OnUpdaterStatusChanged();
+
             closeButton.Text = "Done";
             closeButton.Click += (s, e) => Close();
             AcceptButton = closeButton;
@@ -157,6 +181,7 @@ namespace Vibra.UI
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             engine.DisplaysChanged -= OnDisplaysChanged;
+            updater.StatusChanged -= OnUpdaterStatusChanged;
             engine.ClearPreview();
             store.SaveSoon();
             base.OnFormClosed(e);
@@ -185,7 +210,19 @@ namespace Vibra.UI
             AddFull(hotkeyError, S(14), S(18));
 
             AddSection("GENERAL", null);
-            AddFull(autostartCheck, S(12), S(26));
+            AddFull(autostartCheck, S(8), S(26));
+            AddFull(autoUpdateCheck, S(8), S(26));
+            content.Controls.Add(checkUpdatesButton);
+            checkUpdatesButton.SetBounds(S(22), contentY, S(110), S(30));
+            content.Controls.Add(versionLabel);
+            versionLabel.SetBounds(S(22) + S(122), contentY, S(318), S(30));
+            versionLabel.Tag = "rest";
+            contentY += S(30) + S(16);
+        }
+
+        private void OnUpdaterStatusChanged()
+        {
+            versionLabel.Text = $"Version {Updater.CurrentVersionText} · {updater.Status}";
         }
 
         private void AddSection(string title, string description)
@@ -241,6 +278,8 @@ namespace Vibra.UI
             {
                 if ("full".Equals(control.Tag))
                     control.Width = Math.Max(S(200), width);
+                else if ("rest".Equals(control.Tag))
+                    control.Width = Math.Max(S(100), S(22) + width - control.Left);
             }
         }
 

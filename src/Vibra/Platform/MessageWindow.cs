@@ -12,6 +12,7 @@ namespace Vibra.Platform
     internal sealed class MessageWindow : NativeWindow, IDisposable
     {
         public const int ShowRequestMessage = NativeMethods.WM_APP + 1;
+        public const int QuitRequestMessage = NativeMethods.WM_APP + 2;
 
         private readonly bool sessionNotifications;
 
@@ -29,6 +30,7 @@ namespace Vibra.Platform
         public event Action SystemResumed;
         public event Action SessionEnding;
         public event Action ShowRequested;
+        public event Action QuitRequested;
         public event Action<int> HotkeyPressed;
 
         protected override void WndProc(ref Message m)
@@ -62,6 +64,10 @@ namespace Vibra.Platform
 
                 case ShowRequestMessage:
                     ShowRequested?.Invoke();
+                    break;
+
+                case QuitRequestMessage:
+                    QuitRequested?.Invoke();
                     break;
             }
             base.WndProc(ref m);

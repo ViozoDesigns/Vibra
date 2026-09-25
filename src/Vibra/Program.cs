@@ -11,24 +11,17 @@ namespace Vibra
         [STAThread]
         private static void Main(string[] args)
         {
-            using (var mutex = new Mutex(true, @"Local\Vibra.SingleInstance", out bool firstInstance))
-            {
-                if (!firstInstance)
-                {
-                    // Already running: bring the existing window up instead of starting twice.
-                    try
-                    {
-                        using (var show = EventWaitHandle.OpenExisting(VibraApp.ShowEventName))
-                            show.Set();
-                    }
-                    catch (WaitHandleCannotBeOpenedException)
-                    {
-                    }
-                    return;
-                }
+            bool HasArg(string name) => args.Any(a => string.Equals(a, name, StringComparison.OrdinalIgnoreCase));
 
-                Log.Init();
+            Log.Init();
+            Mutex instance = RunningInstance.Acquire(forceTakeOver: HasArg("--updated"));
+            if (instance == null)
+                return;
+
+            try
+            {
                 Log.Info($"Vibra {Application.ProductVersion} starting");
+                RunningInstance.Register();
 
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
@@ -40,15 +33,19 @@ namespace Vibra
                     VibraApp.Current?.EmergencyRestore();
                 };
 
-                // Needed so background work (library scan) can report back to the UI thread.
+                // Needed so background work (library scan, updates) can report back to the UI thread.
                 SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
 
-                bool startHidden = args.Any(a => string.Equals(a, "--minimized", StringComparison.OrdinalIgnoreCase));
-                bool openSettings = args.Any(a => string.Equals(a, "--settings", StringComparison.OrdinalIgnoreCase));
-                using (var app = new VibraApp(startHidden, openSettings))
+                using (var app = new VibraApp(startHidden: HasArg("--minimized"), openSettings: HasArg("--settings"), justUpdated: HasArg("--updated")))
                     Application.Run(app);
 
                 Log.Info("Vibra exited");
+            }
+            finally
+            {
+                RunningInstance.Unregister();
+                instance.ReleaseMutex();
+                instance.Dispose();
             }
         }
     }
