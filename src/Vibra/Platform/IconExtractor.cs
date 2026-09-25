@@ -31,11 +31,17 @@ namespace Vibra.Platform
         [DllImport("user32.dll", EntryPoint = "GetClassLongPtrW")]
         private static extern IntPtr GetClassLongPtr(IntPtr hWnd, int nIndex);
 
-        /// <summary>The icon stored in an exe or ico file at roughly <paramref name="size"/> pixels, or null.</summary>
+        /// <summary>
+        /// The icon in an exe/dll/ico file, or a square png/jpg image, at roughly <paramref name="size"/>
+        /// pixels. Null if the file has no icon of its own (Windows' generic program icon doesn't count).
+        /// </summary>
         public static Bitmap FromFile(string path, int size)
         {
             if (string.IsNullOrEmpty(path) || !File.Exists(path))
                 return null;
+            string extension = Path.GetExtension(path).ToLowerInvariant();
+            if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".bmp")
+                return FromImage(path);
             try
             {
                 var handles = new IntPtr[1];
@@ -53,13 +59,32 @@ namespace Vibra.Platform
                         DestroyIcon(handles[0]);
                     }
                 }
-
-                using (var icon = Icon.ExtractAssociatedIcon(path))
-                    return icon?.ToBitmap();
+                return null;
             }
             catch (Exception ex)
             {
-                Log.Error($"Could not read icon from {path}", ex);
+                Log.Warn($"Could not read icon from {path}: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>Square-ish artwork (e.g. Steam's cached icon, an Xbox logo) as an icon.</summary>
+        private static Bitmap FromImage(string path)
+        {
+            try
+            {
+                using (var stream = new MemoryStream(File.ReadAllBytes(path)))
+                using (var image = Image.FromStream(stream))
+                {
+                    double ratio = image.Width / (double)Math.Max(1, image.Height);
+                    if (image.Width < 16 || ratio < 0.8 || ratio > 1.25)
+                        return null;
+                    return new Bitmap(image);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Could not read image {path}: {ex.Message}");
                 return null;
             }
         }

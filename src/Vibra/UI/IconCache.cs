@@ -13,7 +13,9 @@ namespace Vibra.UI
 {
     /// <summary>
     /// Game icons, kept as PNGs in %APPDATA%\Vibra\icons so they're available even when the game
-    /// isn't running. Sources, in order: the game's exe on disk, then its window while it's on screen.
+    /// isn't running. Sources, in order: the game's exes and .ico files on disk, the launcher's cached
+    /// artwork (Steam, Xbox), then, while the game runs, its exe (found without touching the game)
+    /// and finally its window icon. Only when all of these come up empty is a placeholder drawn.
     /// </summary>
     internal sealed class IconCache
     {
@@ -21,12 +23,31 @@ namespace Vibra.UI
 
         private readonly Dictionary<string, Image> images = new Dictionary<string, Image>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> missing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        private readonly Func<string, string> installedPathForExe;
+        private readonly Func<string, IEnumerable<string>> candidatesForExe;
 
-        public IconCache(Func<string, string> installedPathForExe)
+        public IconCache(Func<string, IEnumerable<string>> candidatesForExe)
         {
-            this.installedPathForExe = installedPathForExe;
+            this.candidatesForExe = candidatesForExe;
+            RemoveOldCache();
         }
+
+        /// <summary>Earlier versions could cache Windows' generic program icon; start over once.</summary>
+        private static void RemoveOldCache()
+        {
+            try
+            {
+                string old = Path.Combine(AppPaths.DataDirectory, "icons");
+                if (System.IO.Directory.Exists(old))
+                    System.IO.Directory.Delete(old, true);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("Could not remove the old icon cache: " + ex.Message);
+            }
+        }
+
+        /// <summary>A running game's exe was located; worth remembering as the game's icon path.</summary>
+        public event Action<GameProfile, string> IconPathFound;
 
         /// <summary>An icon was found for a game that had none.</summary>
         public event Action Changed;
@@ -35,7 +56,7 @@ namespace Vibra.UI
         {
             get
             {
-                string dir = Path.Combine(AppPaths.DataDirectory, "icons");
+                string dir = Path.Combine(AppPaths.DataDirectory, "icons-v2");
                 System.IO.Directory.CreateDirectory(dir);
                 return dir;
             }
@@ -64,12 +85,30 @@ namespace Vibra.UI
 
         public bool Has(GameProfile game) => Get(game) != null;
 
-        /// <summary>Grabs the icon from a game's window if we don't have one yet.</summary>
+        /// <summary>
+        /// For a game that is running and still has no icon: read it from the running exe (and .ico
+        /// files next to it), falling back to the window's own icon.
+        /// </summary>
         public void CaptureFromWindow(GameProfile game, IntPtr hwnd)
         {
             string key = KeyFor(game);
-            if (key == null || Get(game) != null)
+            if (key == null || hwnd == IntPtr.Zero || Get(game) != null)
                 return;
+
+            Interop.NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
+            string exePath = ProcessPaths.ImagePath(pid);
+            if (exePath != null)
+            {
+                var fromDisk = FirstIcon(new[] { exePath }.Concat(NearbyIcoFiles(exePath)));
+                if (fromDisk != null)
+                {
+                    Store(key, fromDisk);
+                    IconPathFound?.Invoke(game, exePath);
+                    Changed?.Invoke();
+                    return;
+                }
+            }
+
             var bitmap = IconExtractor.FromWindow(hwnd);
             if (bitmap == null)
                 return;
@@ -88,16 +127,46 @@ namespace Vibra.UI
 
         private Image FromFiles(GameProfile game)
         {
-            string key = KeyFor(game);
             var candidates = new List<string> { game.IconPath };
-            candidates.AddRange(game.AllExes.Select(installedPathForExe));
-            foreach (string path in candidates.Where(p => !string.IsNullOrEmpty(p)).Distinct(StringComparer.OrdinalIgnoreCase))
+            candidates.AddRange(NearbyIcoFiles(game.IconPath));
+            foreach (string exe in game.AllExes)
+                candidates.AddRange(candidatesForExe(exe) ?? Enumerable.Empty<string>());
+            var bitmap = FirstIcon(candidates);
+            return bitmap == null ? null : Store(KeyFor(game), bitmap);
+        }
+
+        private static Bitmap FirstIcon(IEnumerable<string> paths)
+        {
+            foreach (string path in paths.Where(p => !string.IsNullOrEmpty(p)).Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 var bitmap = IconExtractor.FromFile(path, SourceSize);
                 if (bitmap != null)
-                    return Store(key, bitmap);
+                    return bitmap;
             }
             return null;
+        }
+
+        /// <summary>Many games ship an .ico next to (or one folder above) their exe.</summary>
+        private static IEnumerable<string> NearbyIcoFiles(string exePath)
+        {
+            if (string.IsNullOrEmpty(exePath))
+                yield break;
+            string folder = Path.GetDirectoryName(exePath);
+            for (int level = 0; level < 2 && !string.IsNullOrEmpty(folder); level++)
+            {
+                string[] files;
+                try
+                {
+                    files = System.IO.Directory.Exists(folder) ? System.IO.Directory.GetFiles(folder, "*.ico") : new string[0];
+                }
+                catch (Exception)
+                {
+                    files = new string[0];
+                }
+                foreach (string file in files.Take(4))
+                    yield return file;
+                folder = Path.GetDirectoryName(folder);
+            }
         }
 
         private Image Store(string key, Bitmap bitmap)

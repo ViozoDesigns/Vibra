@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Windows.Forms;
 using Vibra.App;
 using Vibra.Core;
@@ -20,6 +21,8 @@ namespace Vibra.UI
         private readonly Func<string> hotkeyHint;
         private readonly Action openSettings;
         private readonly Action requestLibraryScan;
+        private readonly UndoHistory history;
+        private readonly UndoToast toast = new UndoToast();
 
         private readonly Label titleLabel = new Label();
         private readonly Label statusLabel = new Label();
@@ -32,7 +35,7 @@ namespace Vibra.UI
         private readonly Label hintLabel = new Label();
         private HashSet<GameProfile> shownGames = new HashSet<GameProfile>();
 
-        public MainForm(VibranceEngine engine, SettingsStore store, IconCache icons, Func<string> hotkeyHint, Action openSettings, Action requestLibraryScan)
+        public MainForm(VibranceEngine engine, SettingsStore store, IconCache icons, UndoHistory history, Func<string> hotkeyHint, Action openSettings, Action requestLibraryScan)
         {
             this.engine = engine;
             this.store = store;
@@ -40,6 +43,7 @@ namespace Vibra.UI
             this.hotkeyHint = hotkeyHint;
             this.openSettings = openSettings;
             this.requestLibraryScan = requestLibraryScan;
+            this.history = history;
 
             SuspendLayout();
             AutoScaleMode = AutoScaleMode.None;
@@ -86,6 +90,15 @@ namespace Vibra.UI
 
             editor = new GameEditor(icons);
             editor.VibranceChanged += OnEditorVibranceChanged;
+            toast.ActionClicked += (s, e) =>
+            {
+                if (toast.OffersRedo)
+                    history.Redo();
+                else
+                    history.Undo();
+            };
+            toast.VisibleChanged += (s, e) => hintLabel.Visible = !toast.Visible;
+            toast.Visible = false;
             editor.RemoveClicked += (s, e) =>
             {
                 var game = editor.Game;
@@ -98,7 +111,7 @@ namespace Vibra.UI
             hintLabel.ForeColor = Theme.SubText;
             hintLabel.Font = Theme.Small;
 
-            Controls.AddRange(new Control[] { titleLabel, statusLabel, settingsButton, pauseButton, gamesHeader, addButton, grid, editor, hintLabel });
+            Controls.AddRange(new Control[] { titleLabel, statusLabel, settingsButton, pauseButton, gamesHeader, addButton, grid, editor, hintLabel, toast });
             // Buttons always paint above the labels next to them.
             settingsButton.BringToFront();
             pauseButton.BringToFront();
@@ -106,6 +119,7 @@ namespace Vibra.UI
             ResumeLayout(false);
 
             engine.StateChanged += OnEngineStateChanged;
+            history.Applied += OnHistoryApplied;
             engine.GamesChanged += OnGamesChanged;
             engine.GameAdjusted += OnGameAdjusted;
             icons.Changed += OnIconsChanged;
@@ -165,6 +179,7 @@ namespace Vibra.UI
                 engine.GamesChanged -= OnGamesChanged;
                 engine.GameAdjusted -= OnGameAdjusted;
                 icons.Changed -= OnIconsChanged;
+                history.Applied -= OnHistoryApplied;
             }
             base.Dispose(disposing);
         }
@@ -197,7 +212,9 @@ namespace Vibra.UI
             y += addSize.Height + S(10);
 
             int bottom = ClientSize.Height - S(12);
-            hintLabel.Bounds = new Rectangle(pad, bottom - S(18), width, S(18));
+            hintLabel.Bounds = new Rectangle(pad, bottom - S(34), width, S(34));
+            hintLabel.TextAlign = ContentAlignment.MiddleLeft;
+            toast.Bounds = hintLabel.Bounds;
             bottom = hintLabel.Top - S(10);
             editor.Bounds = new Rectangle(pad, bottom - editor.PreferredHeight, width, editor.PreferredHeight);
             bottom = editor.Top - S(12);
@@ -251,8 +268,12 @@ namespace Vibra.UI
             editor.Invalidate();
         }
 
-        private void OnEditorVibranceChanged(object sender, EventArgs e)
+        private void OnEditorVibranceChanged(GameProfile game, int previous)
         {
+            int now = game.Vibrance;
+            // One undo step per drag (or burst of arrow keys) on the same game.
+            history.Record($"{game.Name} to {now}%", () => game.Vibrance = previous, () => game.Vibrance = now,
+                "vibrance:" + RuntimeHelpers.GetHashCode(game));
             // Only ever changes the monitor the game is actually on (nothing happens if it isn't on screen).
             store.SaveSoon();
             engine.Evaluate();
@@ -261,10 +282,84 @@ namespace Vibra.UI
 
         private void RemoveGame(GameProfile game)
         {
-            store.Settings.RemoveGame(game);
+            var settings = store.Settings;
+            int index = settings.Games.IndexOf(game);
+            if (index < 0)
+                return;
+            var ignoredBefore = new HashSet<string>(settings.IgnoredExes, StringComparer.OrdinalIgnoreCase);
+            settings.RemoveGame(game);
+            var newlyIgnored = settings.IgnoredExes.Where(e => !ignoredBefore.Contains(e)).ToList();
+
+            string description = $"Removed {game.Name}";
+            history.Record(description,
+                () =>
+                {
+                    settings.Games.Insert(Math.Min(index, settings.Games.Count), game);
+                    settings.IgnoredExes.RemoveAll(e => newlyIgnored.Contains(e, StringComparer.OrdinalIgnoreCase));
+                },
+                () => settings.RemoveGame(game));
+            AfterListChanged();
+            toast.Show(description, offerRedo: false);
+        }
+
+        /// <summary>Adds games as one undoable step (e.g. "Add all installed games").</summary>
+        private List<GameProfile> AddGames(IEnumerable<GameProfile> profiles)
+        {
+            var settings = store.Settings;
+            var ignoredBefore = settings.IgnoredExes.ToList();
+            var added = profiles.Where(p => p?.Exe != null && settings.AddGame(p)).ToList();
+            if (added.Count == 0)
+                return added;
+            var lifted = ignoredBefore.Where(e => !settings.IsIgnored(e)).ToList();
+
+            string description = added.Count == 1 ? $"Added {added[0].Name}" : $"Added {added.Count} games";
+            history.Record(description,
+                () =>
+                {
+                    foreach (var profile in added)
+                        settings.Games.Remove(profile);
+                    settings.IgnoredExes.AddRange(lifted.Where(e => !settings.IsIgnored(e)));
+                },
+                () =>
+                {
+                    foreach (var profile in added)
+                        settings.AddGame(profile);
+                });
+            toast.Show(description, offerRedo: false);
+            return added;
+        }
+
+        private void AfterListChanged()
+        {
             store.SaveSoon();
             RebuildGames();
             engine.Evaluate();
+        }
+
+        private void OnHistoryApplied(string description, bool undone) => Defer(() =>
+        {
+            RebuildGames();
+            editor.RefreshValue();
+            editor.RefreshState(engine);
+            grid.RefreshTiles();
+            toast.Show(undone ? $"Undid: {description}" : $"Redid: {description}", offerRedo: undone);
+        });
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            switch (keyData)
+            {
+                case Keys.Control | Keys.Z:
+                    if (!history.Undo())
+                        toast.Show("Nothing to undo", offerRedo: false, showAction: false);
+                    return true;
+                case Keys.Control | Keys.Y:
+                case Keys.Control | Keys.Shift | Keys.Z:
+                    if (!history.Redo())
+                        toast.Show("Nothing to redo", offerRedo: false, showAction: false);
+                    return true;
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
         }
 
         private void ShowTileMenu(GameProfile game, Point location)
@@ -328,11 +423,8 @@ namespace Vibra.UI
                 }
                 AddItem(menu.Items, $"Add all {installed.Count} installed games", null, () =>
                 {
-                    foreach (var game in installed)
-                        settings.AddGame(game.ToProfile(settings.NewGameVibrance));
-                    store.SaveSoon();
-                    RebuildGames();
-                    engine.Evaluate();
+                    AddGames(installed.Select(game => game.ToProfile(settings.NewGameVibrance)));
+                    AfterListChanged();
                 });
             }
 
@@ -391,18 +483,16 @@ namespace Vibra.UI
                 return;
             if (profile.OtherExes != null && profile.OtherExes.Count == 0)
                 profile.OtherExes = null;
-            if (!store.Settings.AddGame(profile))
+            if (AddGames(new[] { profile }).Count == 0)
             {
                 // Already there (e.g. the exe picked was the game's own launcher): just show it.
                 grid.Selected = store.Settings.FindGame(profile.Exe) ?? grid.Selected;
                 return;
             }
-            store.SaveSoon();
             if (window != IntPtr.Zero)
                 icons.CaptureFromWindow(profile, window);
-            RebuildGames();
+            AfterListChanged();
             grid.Selected = profile;
-            engine.Evaluate();
         }
 
         private void BrowseForGame()
@@ -509,8 +599,9 @@ namespace Vibra.UI
                 Invalidate();
                 if (loading || game == null)
                     return;
+                int previous = game.Vibrance;
                 game.Vibrance = Slider.Value;
-                VibranceChanged?.Invoke(this, EventArgs.Empty);
+                VibranceChanged?.Invoke(game, previous);
             };
             Controls.Add(Slider);
 
@@ -521,7 +612,8 @@ namespace Vibra.UI
             Controls.Add(removeButton);
         }
 
-        public event EventHandler VibranceChanged;
+        /// <summary>The selected game's level changed; passes the game and its previous level.</summary>
+        public event Action<GameProfile, int> VibranceChanged;
         public event EventHandler RemoveClicked;
 
         public VibranceSlider Slider { get; }

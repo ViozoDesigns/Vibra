@@ -48,7 +48,9 @@ Games are shown as a grid of tiles with their icon, name and level. A green dot 
 
 **+ Add game** lists games running now, installed games found in your libraries (or *Add all*), other running apps, and *Browse for a game .exe…*.
 
-Icons come from the game's exe. For games found only by name, the icon is picked up from the game's window the first time it's on screen.
+**Undo:** `Ctrl+Z` undoes and `Ctrl+Y` (or `Ctrl+Shift+Z`) redoes, in the main window and in Settings: adding games (including *Add all*), removing games, level changes (a whole slider drag is one step) and every setting. After adding or removing games, a bar at the bottom offers **Undo** too. Games Vibra adds by itself when they start and in-game shortcut presses aren't part of undo.
+
+**Icons** are looked up in this order: the game's exes and `.ico` files in its install folder, Steam's cached icon for the game, Xbox/Game Pass logo images, and for Riot, Battle.net and similar launchers the game's install folder from Windows' installed-apps list. If none of those has one, Vibra takes it from the running game's exe (located from Windows' process list without touching the game) or its window the first time it's on screen. A colored initials badge is only shown when a game truly has no icon.
 
 ### Settings (gear button, or right-click the tray icon)
 
@@ -120,7 +122,7 @@ Run the tests with `dotnet test tests/Vibra.Tests`.
 
 - Settings: `%APPDATA%\Vibra\settings.json`
 - Log (useful if something doesn't switch): `%APPDATA%\Vibra\vibra.log`. It records which game is on which monitor whenever that changes.
-- Icon cache: `%APPDATA%\Vibra\icons`
+- Icon cache: `%APPDATA%\Vibra\icons-v2`
 
 ## How it works (for the curious)
 

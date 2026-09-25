@@ -29,6 +29,7 @@ namespace Vibra.App
         private readonly NotifyIcon tray;
         private readonly ToolStripMenuItem pauseItem;
         private readonly Updater updater;
+        private readonly UndoHistory history = new UndoHistory();
         private readonly EventWaitHandle showEvent;
         private readonly RegisteredWaitHandle showWait;
         private readonly EventWaitHandle quitEvent;
@@ -50,7 +51,15 @@ namespace Vibra.App
             store = SettingsStore.Load();
             backend = new NvidiaBackend();
             engine = new VibranceEngine(backend, store);
-            icons = new IconCache(exe => engine.Catalog.InstalledPathFor(exe));
+            icons = new IconCache(exe => engine.Catalog.IconCandidatesFor(exe));
+            icons.IconPathFound += (game, path) =>
+            {
+                if (string.IsNullOrEmpty(game.IconPath))
+                {
+                    game.IconPath = path;
+                    store.SaveSoon();
+                }
+            };
 
             messages = new MessageWindow();
             messages.DisplayChanged += engine.OnDisplayConfigurationChanged;
@@ -75,6 +84,7 @@ namespace Vibra.App
             };
 
             engine.StateChanged += OnEngineStateChanged;
+            history.Applied += OnHistoryApplied;
             engine.Start();
             RegisterHotkeys();
             UpdateTray();
@@ -120,6 +130,17 @@ namespace Vibra.App
                 icons.CaptureFromWindow(game, engine.WindowOf(game));
         }
 
+        /// <summary>An undo/redo changed the settings: save and apply them.</summary>
+        private void OnHistoryApplied(string description, bool undone)
+        {
+            store.SaveSoon();
+            engine.Evaluate();
+            if (settingsForm == null)
+                RegisterHotkeys(); // shortcuts may have changed back
+            UpdateTray();
+            mainForm?.RefreshStatus();
+        }
+
         // ------------------------------------------------------------------ Tray
 
         private ContextMenuStrip CreateTrayMenu()
@@ -148,7 +169,7 @@ namespace Vibra.App
                 return;
             if (mainForm == null || mainForm.IsDisposed)
             {
-                mainForm = new MainForm(engine, store, icons, HotkeyHint, OpenSettings, StartLibraryScan);
+                mainForm = new MainForm(engine, store, icons, history, HotkeyHint, OpenSettings, StartLibraryScan);
                 mainForm.HiddenToTray += OnHiddenToTray;
             }
             if (!mainForm.Visible)
@@ -171,7 +192,7 @@ namespace Vibra.App
 
             // Global shortcuts would swallow the keys the user presses to set new ones.
             UnregisterHotkeys();
-            settingsForm = new SettingsForm(engine, store, IsHotkeyAvailable, updater);
+            settingsForm = new SettingsForm(engine, store, IsHotkeyAvailable, updater, history);
             settingsForm.FormClosed += (s, e) =>
             {
                 settingsForm = null;

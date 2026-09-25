@@ -18,6 +18,7 @@ namespace Vibra.UI
         private readonly SettingsStore store;
         private readonly Func<Hotkey, bool> isHotkeyAvailable;
         private readonly Updater updater;
+        private readonly UndoHistory history;
 
         private readonly Panel content = new Panel { AutoScroll = true };
         private readonly DisplayMap displayMap = new DisplayMap();
@@ -36,12 +37,13 @@ namespace Vibra.UI
         private readonly FlatButton closeButton = new FlatButton();
         private bool loading;
 
-        public SettingsForm(VibranceEngine engine, SettingsStore store, Func<Hotkey, bool> isHotkeyAvailable, Updater updater)
+        public SettingsForm(VibranceEngine engine, SettingsStore store, Func<Hotkey, bool> isHotkeyAvailable, Updater updater, UndoHistory history)
         {
             this.engine = engine;
             this.store = store;
             this.isHotkeyAvailable = isHotkeyAvailable;
             this.updater = updater;
+            this.history = history;
             var settings = store.Settings;
 
             SuspendLayout();
@@ -73,14 +75,23 @@ namespace Vibra.UI
             newGamesRow.Slider.Value = settings.NewGameVibrance;
             newGamesRow.Slider.ValueChanged += (s, e) =>
             {
-                store.Settings.NewGameVibrance = newGamesRow.Slider.Value;
+                if (loading)
+                    return;
+                int before = store.Settings.NewGameVibrance, after = newGamesRow.Slider.Value;
+                store.Settings.NewGameVibrance = after;
+                history.Record($"New games level to {after}%", () => store.Settings.NewGameVibrance = before, () => store.Settings.NewGameVibrance = after, "new-games");
                 store.SaveSoon();
             };
             SetupCheck(autoAddCheck, "Add games automatically when they start");
             autoAddCheck.Checked = !settings.DisableAutoAdd;
             autoAddCheck.CheckedChanged += (s, e) =>
             {
-                store.Settings.DisableAutoAdd = !autoAddCheck.Checked;
+                if (loading)
+                    return;
+                bool disable = !autoAddCheck.Checked;
+                store.Settings.DisableAutoAdd = disable;
+                history.Record(disable ? "Turned off auto-add" : "Turned on auto-add",
+                    () => store.Settings.DisableAutoAdd = !disable, () => store.Settings.DisableAutoAdd = disable);
                 store.SaveSoon();
             };
 
@@ -96,7 +107,11 @@ namespace Vibra.UI
             pauseBox.ValueChanged += OnHotkeyChanged;
             stepStepper.ValueChanged += (s, e) =>
             {
-                store.Settings.HotkeyStep = stepStepper.Value;
+                if (loading)
+                    return;
+                int before = store.Settings.HotkeyStep, after = stepStepper.Value;
+                store.Settings.HotkeyStep = after;
+                history.Record($"Step to {after}%", () => store.Settings.HotkeyStep = before, () => store.Settings.HotkeyStep = after, "step");
                 store.SaveSoon();
             };
             hotkeyError.ForeColor = Theme.Warning;
@@ -113,7 +128,12 @@ namespace Vibra.UI
             autoUpdateCheck.Checked = !settings.DisableAutoUpdate;
             autoUpdateCheck.CheckedChanged += (s, e) =>
             {
-                store.Settings.DisableAutoUpdate = !autoUpdateCheck.Checked;
+                if (loading)
+                    return;
+                bool disable = !autoUpdateCheck.Checked;
+                store.Settings.DisableAutoUpdate = disable;
+                history.Record(disable ? "Turned off automatic updates" : "Turned on automatic updates",
+                    () => store.Settings.DisableAutoUpdate = !disable, () => store.Settings.DisableAutoUpdate = disable);
                 store.SaveSoon();
             };
             versionLabel.ForeColor = Theme.SubText;
@@ -137,6 +157,7 @@ namespace Vibra.UI
 
             RefreshDisplays();
             engine.DisplaysChanged += OnDisplaysChanged;
+            history.Applied += OnHistoryApplied;
         }
 
         private void RefreshDisplays()
@@ -182,6 +203,7 @@ namespace Vibra.UI
         {
             engine.DisplaysChanged -= OnDisplaysChanged;
             updater.StatusChanged -= OnUpdaterStatusChanged;
+            history.Applied -= OnHistoryApplied;
             engine.ClearPreview();
             store.SaveSoon();
             base.OnFormClosed(e);
@@ -316,7 +338,10 @@ namespace Vibra.UI
             var profile = store.Settings.FindDisplay(display.Id);
             if (profile == null)
                 return;
-            profile.Vibrance = displayRow.Slider.Value;
+            int before = profile.Vibrance, after = displayRow.Slider.Value;
+            profile.Vibrance = after;
+            history.Record($"{display.Name} desktop level to {after}%", () => profile.Vibrance = before, () => profile.Vibrance = after,
+                "desktop:" + display.Id);
             store.SaveSoon();
             displayMap.Invalidate();
             if (displayRow.Slider.IsDragging)
@@ -362,19 +387,72 @@ namespace Vibra.UI
             }
 
             hotkeyError.Text = string.Empty;
-            store.Settings.HotkeyIncrease = increaseBox.Value.ToString();
-            store.Settings.HotkeyDecrease = decreaseBox.Value.ToString();
-            store.Settings.HotkeyPause = pauseBox.Value.ToString();
+            var settings = store.Settings;
+            var before = new[] { settings.HotkeyIncrease, settings.HotkeyDecrease, settings.HotkeyPause };
+            var after = new[] { increaseBox.Value.ToString(), decreaseBox.Value.ToString(), pauseBox.Value.ToString() };
+            void Apply(string[] values)
+            {
+                settings.HotkeyIncrease = values[0];
+                settings.HotkeyDecrease = values[1];
+                settings.HotkeyPause = values[2];
+            }
+            Apply(after);
+            history.Record($"Shortcut set to {box.Value}", () => Apply(before), () => Apply(after));
             store.SaveSoon();
+        }
+
+        /// <summary>Shows the current settings again, e.g. after an undo.</summary>
+        private void RefreshFromSettings()
+        {
+            var settings = store.Settings;
+            loading = true;
+            newGamesRow.Slider.Value = settings.NewGameVibrance;
+            autoAddCheck.Checked = !settings.DisableAutoAdd;
+            increaseBox.Value = Parse(settings.HotkeyIncrease);
+            decreaseBox.Value = Parse(settings.HotkeyDecrease);
+            pauseBox.Value = Parse(settings.HotkeyPause);
+            stepStepper.Value = settings.HotkeyStep;
+            autoUpdateCheck.Checked = !settings.DisableAutoUpdate;
+            autostartCheck.Checked = Autostart.IsEnabled;
+            hotkeyError.Text = string.Empty;
+            loading = false;
+            displayMap.Invalidate();
+            ShowSelectedDisplay();
+        }
+
+        private void OnHistoryApplied(string description, bool undone)
+        {
+            if (IsHandleCreated && !IsDisposed)
+                BeginInvoke(new Action(RefreshFromSettings));
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            switch (keyData)
+            {
+                case Keys.Control | Keys.Z:
+                    history.Undo();
+                    return true;
+                case Keys.Control | Keys.Y:
+                case Keys.Control | Keys.Shift | Keys.Z:
+                    history.Redo();
+                    return true;
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
         }
 
         // ------------------------------------------------------------------ General
 
         private void OnAutostartChanged(object sender, EventArgs e)
         {
+            if (loading)
+                return;
+            bool enable = autostartCheck.Checked;
             try
             {
-                Autostart.Set(autostartCheck.Checked);
+                Autostart.Set(enable);
+                history.Record(enable ? "Turned on Start with Windows" : "Turned off Start with Windows",
+                    () => TrySetAutostart(!enable), () => TrySetAutostart(enable));
             }
             catch (Exception ex)
             {
@@ -383,6 +461,18 @@ namespace Vibra.UI
                 autostartCheck.CheckedChanged -= OnAutostartChanged;
                 autostartCheck.Checked = Autostart.IsEnabled;
                 autostartCheck.CheckedChanged += OnAutostartChanged;
+            }
+        }
+
+        private static void TrySetAutostart(bool enable)
+        {
+            try
+            {
+                Autostart.Set(enable);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Could not change autostart", ex);
             }
         }
 

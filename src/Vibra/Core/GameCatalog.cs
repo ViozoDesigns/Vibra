@@ -13,7 +13,8 @@ namespace Vibra.Core
         {
             Name = name;
             Source = source;
-            IconPath = iconPath;
+            if (!string.IsNullOrEmpty(iconPath))
+                IconCandidates.Add(iconPath);
             Exes = exes.Where(e => !string.IsNullOrWhiteSpace(e))
                        .Select(GameMatcher.FileName)
                        .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -27,7 +28,20 @@ namespace Vibra.Core
         public List<string> Exes { get; }
         public string PrimaryExe => Exes.Count > 0 ? Exes[0] : null;
         /// <summary>Full path of the main exe (or an icon file) on disk, if known.</summary>
-        public string IconPath { get; }
+        public string IconPath => IconCandidates.Count > 0 ? IconCandidates[0] : null;
+
+        /// <summary>Files to take the icon from, best first: exes, .ico files, launcher artwork.</summary>
+        public List<string> IconCandidates { get; } = new List<string>();
+
+        public DetectedGame WithIconCandidates(IEnumerable<string> paths)
+        {
+            foreach (string path in paths)
+            {
+                if (!string.IsNullOrEmpty(path) && !IconCandidates.Contains(path, StringComparer.OrdinalIgnoreCase))
+                    IconCandidates.Add(path);
+            }
+            return this;
+        }
 
         public GameProfile ToProfile(int vibrance) => new GameProfile
         {
@@ -161,6 +175,10 @@ namespace Vibra.Core
         /// <summary>Full path of an installed game's exe (for its icon), or null.</summary>
         public string InstalledPathFor(string exe) =>
             exe != null && byExe.TryGetValue(exe, out var game) ? game.IconPath : null;
+
+        /// <summary>Every file an installed game's icon could come from, best first.</summary>
+        public IReadOnlyList<string> IconCandidatesFor(string exe) =>
+            exe != null && byExe.TryGetValue(exe, out var game) ? (IReadOnlyList<string>)game.IconCandidates : new string[0];
 
         /// <summary>Identifies a running executable as a game, or returns null if it does not look like one.</summary>
         public DetectedGame Identify(string exe)

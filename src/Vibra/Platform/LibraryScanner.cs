@@ -74,10 +74,11 @@ namespace Vibra.Platform
                         var values = SteamFormats.ParseAppManifest(File.ReadAllText(manifest));
                         values.TryGetValue("name", out string name);
                         values.TryGetValue("installdir", out string installDir);
+                        values.TryGetValue("appid", out string appId);
                         if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(installDir) || IsSteamTool(name))
                             continue;
                         string folder = Path.Combine(steamapps, "common", installDir);
-                        game = FromFolder(name, "Steam", folder);
+                        game = FromFolder(name, "Steam", folder)?.WithIconCandidates(SteamCachedIcons(steamPath, appId));
                     }
                     catch (Exception ex)
                     {
@@ -86,6 +87,30 @@ namespace Vibra.Platform
                     if (game != null)
                         yield return game;
                 }
+            }
+        }
+
+        /// <summary>
+        /// Steam keeps every game's icon in its library cache: "&lt;appid&gt;_icon.jpg" (older clients)
+        /// or a file named by the icon's hash inside "&lt;appid&gt;\" (newer clients).
+        /// </summary>
+        private static IEnumerable<string> SteamCachedIcons(string steamPath, string appId)
+        {
+            if (string.IsNullOrEmpty(appId) || !appId.All(char.IsDigit))
+                yield break;
+            string cache = Path.Combine(steamPath, "appcache", "librarycache");
+            string legacy = Path.Combine(cache, appId + "_icon.jpg");
+            if (File.Exists(legacy))
+                yield return legacy;
+
+            string folder = Path.Combine(cache, appId);
+            if (!Directory.Exists(folder))
+                yield break;
+            foreach (string file in Directory.EnumerateFiles(folder, "*.jpg"))
+            {
+                string stem = Path.GetFileNameWithoutExtension(file);
+                if (stem.Length == 40 && stem.All(Uri.IsHexDigit))
+                    yield return file;
             }
         }
 
@@ -133,7 +158,7 @@ namespace Vibra.Platform
                     var found = FromFolder(manifest.DisplayName, "Epic", manifest.InstallLocation);
                     string launch = string.IsNullOrEmpty(manifest.LaunchExecutable) ? null : Path.GetFileName(manifest.LaunchExecutable);
                     var exes = new List<string>();
-                    string icon = found?.IconPath;
+                    string icon = null;
                     if (launch != null && !ExeFilter.IsHelper(launch))
                     {
                         exes.Add(launch);
@@ -142,7 +167,8 @@ namespace Vibra.Platform
                     if (found != null)
                         exes.AddRange(found.Exes);
                     if (exes.Count > 0)
-                        game = new DetectedGame(manifest.DisplayName, "Epic", exes, icon);
+                        game = new DetectedGame(manifest.DisplayName, "Epic", exes, icon)
+                            .WithIconCandidates(found?.IconCandidates ?? Enumerable.Empty<string>());
                 }
                 catch (Exception ex)
                 {
@@ -182,7 +208,8 @@ namespace Vibra.Platform
                         if (found != null)
                             exes.AddRange(found.Exes);
                         if (exes.Count > 0)
-                            yield return new DetectedGame(name, "GOG", exes, icon ?? found?.IconPath);
+                            yield return new DetectedGame(name, "GOG", exes, icon)
+                                .WithIconCandidates(found?.IconCandidates ?? Enumerable.Empty<string>());
                     }
                 }
             }
@@ -203,7 +230,10 @@ namespace Vibra.Platform
                 {
                     string name = Path.GetFileName(folder);
                     string content = Path.Combine(folder, "Content");
-                    var game = FromFolder(name, "Xbox", Directory.Exists(content) ? content : folder);
+                    string gameRoot = Directory.Exists(content) ? content : folder;
+                    var game = FromFolder(name, "Xbox", gameRoot)?.WithIconCandidates(
+                        SafeFiles(gameRoot, "*.png").Where(f => Path.GetFileName(f).IndexOf("logo", StringComparison.OrdinalIgnoreCase) >= 0)
+                            .OrderByDescending(f => Path.GetFileName(f).IndexOf("Square", StringComparison.OrdinalIgnoreCase) >= 0));
                     if (game != null)
                         yield return game;
                 }
@@ -214,7 +244,7 @@ namespace Vibra.Platform
 
         private static IEnumerable<DetectedGame> ScanKnownInstalled()
         {
-            var installed = new List<(string Name, string Icon)>();
+            var installed = new List<(string Name, string Icon, string Folder)>();
             foreach (var (hive, view) in new[]
                      {
                          (RegistryHive.LocalMachine, RegistryView.Registry64),
@@ -234,7 +264,7 @@ namespace Vibra.Platform
                             using (var key = uninstall.OpenSubKey(sub))
                             {
                                 if (key?.GetValue("DisplayName") is string displayName && !string.IsNullOrWhiteSpace(displayName))
-                                    installed.Add((displayName.Trim(), CleanIconPath(key.GetValue("DisplayIcon") as string)));
+                                    installed.Add((displayName.Trim(), CleanIconPath(key.GetValue("DisplayIcon") as string), key.GetValue("InstallLocation") as string));
                             }
                         }
                     }
@@ -252,7 +282,14 @@ namespace Vibra.Platform
                     entry.Name.StartsWith(known.Name + " ", StringComparison.OrdinalIgnoreCase) ||
                     entry.Name.StartsWith(known.Name + ":", StringComparison.OrdinalIgnoreCase));
                 if (match.Name != null)
-                    yield return new DetectedGame(known.Name, "Installed", known.Exes, match.Icon);
+                {
+                    // Look for the game's own exe in its install folder: best icon, and exact paths.
+                    var found = string.IsNullOrWhiteSpace(match.Folder) ? new List<string>() : FindFiles(match.Folder.Trim().Trim('"'), known.Exes);
+                    yield return new DetectedGame(known.Name, "Installed", known.Exes)
+                        .WithIconCandidates(found)
+                        .WithIconCandidates(new[] { match.Icon })
+                        .WithIconCandidates(string.IsNullOrWhiteSpace(match.Folder) ? Enumerable.Empty<string>() : SafeFiles(match.Folder.Trim().Trim('"'), "*.ico"));
+                }
             }
         }
 
@@ -315,7 +352,55 @@ namespace Vibra.Platform
             }
 
             var ranked = ExeFilter.RankExes(exes, name).Take(MaxExesPerGame).ToList();
-            return ranked.Count == 0 ? null : new DetectedGame(name, source, ranked, paths[ranked[0]]);
+            if (ranked.Count == 0)
+                return null;
+            return new DetectedGame(name, source, ranked)
+                .WithIconCandidates(ranked.Take(6).Select(exe => paths[exe]))
+                .WithIconCandidates(SafeFiles(folder, "*.ico").Take(4));
+        }
+
+        /// <summary>Finds files with the given names under a folder (a few levels deep).</summary>
+        private static List<string> FindFiles(string folder, IEnumerable<string> names)
+        {
+            var wanted = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+            var found = new List<string>();
+            if (!Directory.Exists(folder))
+                return found;
+            var pending = new Stack<(string Path, int Depth)>();
+            pending.Push((folder, 0));
+            int visited = 0;
+            while (pending.Count > 0 && visited++ < MaxFoldersPerGame)
+            {
+                var (path, depth) = pending.Pop();
+                try
+                {
+                    found.AddRange(Directory.EnumerateFiles(path, "*.exe").Where(f => wanted.Contains(Path.GetFileName(f))));
+                    if (depth < MaxFolderDepth)
+                    {
+                        foreach (string dir in Directory.EnumerateDirectories(path))
+                            pending.Push((dir, depth + 1));
+                    }
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+                catch (IOException)
+                {
+                }
+            }
+            return found;
+        }
+
+        private static IEnumerable<string> SafeFiles(string folder, string pattern)
+        {
+            try
+            {
+                return Directory.Exists(folder) ? Directory.GetFiles(folder, pattern) : new string[0];
+            }
+            catch (Exception)
+            {
+                return new string[0];
+            }
         }
 
         private static string ReadRegistryString(RegistryHive hive, RegistryView view, string path, string value)

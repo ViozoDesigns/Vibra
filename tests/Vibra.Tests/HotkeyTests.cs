@@ -114,6 +114,18 @@ namespace Vibra.Tests
         }
 
         [Fact]
+        public void Icon_candidates_are_kept_in_order_without_duplicates()
+        {
+            var game = new DetectedGame("Hades II", "Steam", new[] { "Hades2.exe" }, @"D:\Steam\Hades II\Hades2.exe")
+                .WithIconCandidates(new[] { @"D:\Steam\Hades II\hades.ico", @"d:\steam\hades ii\hades2.exe", null, @"C:\Steam\appcache\librarycache\1145350_icon.jpg" });
+            var catalog = new GameCatalog(new[] { game });
+
+            Assert.Equal(new[] { @"D:\Steam\Hades II\Hades2.exe", @"D:\Steam\Hades II\hades.ico", @"C:\Steam\appcache\librarycache\1145350_icon.jpg" },
+                catalog.IconCandidatesFor("hades2.exe"));
+            Assert.Empty(catalog.IconCandidatesFor("unknown.exe"));
+        }
+
+        [Fact]
         public void Installed_games_remember_where_their_exe_is()
         {
             var catalog = new GameCatalog(new[] { new DetectedGame("Hades II", "Steam", new List<string> { "Hades2.exe" }, @"D:\Steam\Hades II\Hades2.exe") });
