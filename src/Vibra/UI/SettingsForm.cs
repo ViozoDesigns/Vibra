@@ -139,9 +139,19 @@ namespace Vibra.UI
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
-            var area = Screen.FromControl(this).WorkingArea;
+            var area = Owner != null ? Screen.FromControl(Owner).WorkingArea : Screen.FromControl(this).WorkingArea;
             if (Height > area.Height * 0.92)
                 Height = (int)(area.Height * 0.92);
+
+            // Show() ignores CenterParent, so center over the main window by hand (kept on screen).
+            if (Owner != null)
+            {
+                int x = Owner.Left + (Owner.Width - Width) / 2;
+                int y = Owner.Top + (Owner.Height - Height) / 2;
+                Location = new Point(
+                    Math.Max(area.Left, Math.Min(x, area.Right - Width)),
+                    Math.Max(area.Top, Math.Min(y, area.Bottom - Height)));
+            }
         }
 
         protected override void OnFormClosed(FormClosedEventArgs e)
