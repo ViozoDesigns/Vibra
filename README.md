@@ -37,23 +37,43 @@ Tips:
 
 1. Download `Vibra.exe` (see [Getting the exe](#getting-the-exe)) and put it anywhere, e.g. `C:\Tools\Vibra\`.
 2. Run it. It appears in the tray and opens its window.
-3. Play. Recognised games are added automatically the first time they're on screen, at the **New games** level.
+3. Play. Recognised games are added automatically the first time they're on screen, at your **New games** level.
 
-The window has:
+### Main window: your games
 
-- **Games**: one slider per game. A green dot means that game is on screen right now. Dragging a slider shows the value live: on the game if it's visible, otherwise on the monitor the Vibra window is on. `✕` removes a game; removed games are never auto-added again unless you add them yourself.
-- **+ Add game**: games running now, installed games found in your libraries, other running apps, or *Browse for a game .exe…*.
-- **Defaults**: the **desktop** level for each monitor (used whenever no game is on it) and the **New games** level.
-- **Start with Windows** and **Auto-add games when they start**.
+Games are shown as a grid of tiles with their icon, name and level. A green dot means that game is on screen right now. Click a tile to edit it in the panel below:
 
-In-game hotkeys:
+- **Slider**: that game's vibrance. It changes the monitor the game is on, live, and only that monitor. If the game isn't on screen, the new level is used next time it is.
+- **Remove** (or right-click a tile, or press Delete): removes the game. Removed games are never auto-added again unless you add them yourself.
 
-| Keys | Action |
-|---|---|
-| `Ctrl+Alt+PgUp` | +5% for the game you're playing (adds it if it's new) |
-| `Ctrl+Alt+PgDn` | −5% |
+**+ Add game** lists games running now, installed games found in your libraries (or *Add all*), other running apps, and *Browse for a game .exe…*.
 
-Closing the window keeps Vibra running in the tray. Right-click the tray icon to **Pause** (restores desktop colors) or **Exit**.
+Icons come from the game's exe. For games found only by name, the icon is picked up from the game's window the first time it's on screen.
+
+### Settings (gear button, or right-click the tray icon)
+
+- **Displays**: your monitors, laid out like in Windows' display settings. Click one to set its **desktop level**, used whenever no game is on it. You see a live preview on that monitor while dragging.
+- **New games**: the level for newly added games, and whether games are added automatically when they start.
+- **Shortcuts**: click a box and press the keys you want; Backspace turns a shortcut off. If another app already uses a combination, Vibra tells you straight away.
+
+  | Action | Default |
+  |---|---|
+  | Increase vibrance of the game you're playing (adds it if it's new) | `Ctrl+Alt+PgUp` |
+  | Decrease vibrance | `Ctrl+Alt+PgDn` |
+  | Pause / resume Vibra | off |
+  | Step per press | 5% |
+
+- **General**: Start with Windows.
+
+Closing the main window keeps Vibra running in the tray. Right-click the tray icon for **Settings**, **Pause** (restores desktop colors) or **Exit**.
+
+### Which monitor gets boosted
+
+A monitor shows a game's level while that game is what you're looking at there:
+
+- a fullscreen or borderless game keeps its monitor even while you click around on another monitor;
+- a windowed game (a launcher or lobby, like League's client) keeps its monitor as long as nothing covers most of it, including while you use Vibra or another monitor;
+- clicking into another app on the same monitor, or alt-tabbing to it, switches that monitor back to its desktop level at the same moment.
 
 ### Your NVIDIA Control Panel setting (e.g. 70%)
 
@@ -86,11 +106,12 @@ Run the tests with `dotnet test tests/Vibra.Tests`.
 ## Files
 
 - Settings: `%APPDATA%\Vibra\settings.json`
-- Log (useful if something doesn't switch): `%APPDATA%\Vibra\vibra.log`
+- Log (useful if something doesn't switch): `%APPDATA%\Vibra\vibra.log`. It records which game is on which monitor whenever that changes.
+- Icon cache: `%APPDATA%\Vibra\icons`
 
 ## How it works (for the curious)
 
-- `Core/ScreenDecider.cs` decides, per monitor, which window you're actually looking at. It walks windows top to bottom; a window owns a monitor if it covers at least half of it, or if it's the focused window mainly on that monitor.
+- `Core/ScreenDecider.cs` decides, per monitor, which window you're actually looking at. It walks windows top to bottom; a window owns a monitor if it covers at least half of it, if it's the focused window mainly on that monitor, or if it's a game mainly on that monitor that isn't mostly covered.
 - `App/VibranceEngine.cs` listens to Windows events (foreground, minimise/restore, move/resize end, window close/hide, cloak) and re-evaluates immediately. It only calls the driver when a monitor's target level actually changes. A 1-second watchdog catches anything the events miss and repairs driver resets.
 - `Backends/NvidiaBackend.cs` calls NVAPI's digital vibrance functions (`NvAPI_GetDVCInfo` / `NvAPI_SetDVCLevel`) per display. `nvapi64.dll` is only ever loaded from System32.
 - `Platform/WindowScanner.cs` lists windows read-only and ignores shell UI and overlays. `Platform/ProcessNameCache.cs` resolves exe names from a process snapshot, without opening game processes.
@@ -99,4 +120,4 @@ Run the tests with `dotnet test tests/Vibra.Tests`.
 
 - AMD backend (ADLX display saturation) and Intel backend (IGCL).
 - Optional short fade when switching.
-- Custom hotkeys.
+- Renaming games.

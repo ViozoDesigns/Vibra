@@ -9,10 +9,11 @@ namespace Vibra.Core
     /// <summary>A game Vibra found installed or recognised.</summary>
     internal sealed class DetectedGame
     {
-        public DetectedGame(string name, string source, IEnumerable<string> exes)
+        public DetectedGame(string name, string source, IEnumerable<string> exes, string iconPath = null)
         {
             Name = name;
             Source = source;
+            IconPath = iconPath;
             Exes = exes.Where(e => !string.IsNullOrWhiteSpace(e))
                        .Select(GameMatcher.FileName)
                        .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -25,6 +26,8 @@ namespace Vibra.Core
         /// <summary>Executables belonging to the game, most likely main executable first.</summary>
         public List<string> Exes { get; }
         public string PrimaryExe => Exes.Count > 0 ? Exes[0] : null;
+        /// <summary>Full path of the main exe (or an icon file) on disk, if known.</summary>
+        public string IconPath { get; }
 
         public GameProfile ToProfile(int vibrance) => new GameProfile
         {
@@ -32,6 +35,7 @@ namespace Vibra.Core
             OtherExes = Exes.Count > 1 ? Exes.Skip(1).ToList() : null,
             Name = Name,
             Vibrance = VibranceScale.Clamp(vibrance),
+            IconPath = IconPath,
         };
     }
 
@@ -57,7 +61,7 @@ namespace Vibra.Core
             new Entry("Fortnite", "FortniteClient-Win64-Shipping.exe"),
             new Entry("Apex Legends", "r5apex.exe", "r5apex_dx12.exe"),
             new Entry("Overwatch", "Overwatch.exe"),
-            new Entry("League of Legends", "League of Legends.exe"),
+            new Entry("League of Legends", "League of Legends.exe", "LeagueClientUx.exe", "LeagueClient.exe"),
             new Entry("Rainbow Six Siege", "RainbowSix.exe", "RainbowSix_Vulkan.exe", "RainbowSix_DX11.exe"),
             new Entry("Rocket League", "RocketLeague.exe"),
             new Entry("Call of Duty", "cod.exe", "ModernWarfare.exe", "BlackOpsColdWar.exe"),
@@ -134,6 +138,10 @@ namespace Vibra.Core
 
         /// <summary>Installed games found in launcher libraries, sorted by name.</summary>
         public IReadOnlyList<DetectedGame> Installed { get; }
+
+        /// <summary>Full path of an installed game's exe (for its icon), or null.</summary>
+        public string InstalledPathFor(string exe) =>
+            exe != null && byExe.TryGetValue(exe, out var game) ? game.IconPath : null;
 
         /// <summary>Identifies a running executable as a game, or returns null if it does not look like one.</summary>
         public DetectedGame Identify(string exe)

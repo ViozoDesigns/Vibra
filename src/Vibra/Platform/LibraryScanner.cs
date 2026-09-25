@@ -133,12 +133,16 @@ namespace Vibra.Platform
                     var found = FromFolder(manifest.DisplayName, "Epic", manifest.InstallLocation);
                     string launch = string.IsNullOrEmpty(manifest.LaunchExecutable) ? null : Path.GetFileName(manifest.LaunchExecutable);
                     var exes = new List<string>();
+                    string icon = found?.IconPath;
                     if (launch != null && !ExeFilter.IsHelper(launch))
+                    {
                         exes.Add(launch);
+                        icon = Path.Combine(manifest.InstallLocation, manifest.LaunchExecutable.Replace('/', '\\'));
+                    }
                     if (found != null)
                         exes.AddRange(found.Exes);
                     if (exes.Count > 0)
-                        game = new DetectedGame(manifest.DisplayName, "Epic", exes);
+                        game = new DetectedGame(manifest.DisplayName, "Epic", exes, icon);
                 }
                 catch (Exception ex)
                 {
@@ -168,13 +172,17 @@ namespace Vibra.Platform
                         if (string.IsNullOrEmpty(name))
                             continue;
                         var exes = new List<string>();
+                        string icon = null;
                         if (!string.IsNullOrEmpty(exe) && !ExeFilter.IsHelper(Path.GetFileName(exe)))
+                        {
                             exes.Add(Path.GetFileName(exe));
+                            icon = exe;
+                        }
                         var found = string.IsNullOrEmpty(path) ? null : FromFolder(name, "GOG", path);
                         if (found != null)
                             exes.AddRange(found.Exes);
                         if (exes.Count > 0)
-                            yield return new DetectedGame(name, "GOG", exes);
+                            yield return new DetectedGame(name, "GOG", exes, icon ?? found?.IconPath);
                     }
                 }
             }
@@ -206,7 +214,7 @@ namespace Vibra.Platform
 
         private static IEnumerable<DetectedGame> ScanKnownInstalled()
         {
-            var installedNames = new List<string>();
+            var installed = new List<(string Name, string Icon)>();
             foreach (var (hive, view) in new[]
                      {
                          (RegistryHive.LocalMachine, RegistryView.Registry64),
@@ -226,7 +234,7 @@ namespace Vibra.Platform
                             using (var key = uninstall.OpenSubKey(sub))
                             {
                                 if (key?.GetValue("DisplayName") is string displayName && !string.IsNullOrWhiteSpace(displayName))
-                                    installedNames.Add(displayName.Trim());
+                                    installed.Add((displayName.Trim(), CleanIconPath(key.GetValue("DisplayIcon") as string)));
                             }
                         }
                     }
@@ -239,13 +247,28 @@ namespace Vibra.Platform
 
             foreach (var known in KnownGames.All)
             {
-                bool installed = installedNames.Any(n =>
-                    string.Equals(n, known.Name, StringComparison.OrdinalIgnoreCase) ||
-                    n.StartsWith(known.Name + " ", StringComparison.OrdinalIgnoreCase) ||
-                    n.StartsWith(known.Name + ":", StringComparison.OrdinalIgnoreCase));
-                if (installed)
-                    yield return new DetectedGame(known.Name, "Installed", known.Exes);
+                var match = installed.FirstOrDefault(entry =>
+                    string.Equals(entry.Name, known.Name, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Name.StartsWith(known.Name + " ", StringComparison.OrdinalIgnoreCase) ||
+                    entry.Name.StartsWith(known.Name + ":", StringComparison.OrdinalIgnoreCase));
+                if (match.Name != null)
+                    yield return new DetectedGame(known.Name, "Installed", known.Exes, match.Icon);
             }
+        }
+
+        /// <summary>Uninstall entries store icons as "C:\path\game.exe,0" (sometimes quoted).</summary>
+        private static string CleanIconPath(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return null;
+            string path = value.Trim();
+            int comma = path.LastIndexOf(',');
+            if (comma > 2 && int.TryParse(path.Substring(comma + 1).Trim(), out _))
+                path = path.Substring(0, comma);
+            path = path.Trim().Trim('"');
+            string ext = Path.GetExtension(path);
+            bool usable = string.Equals(ext, ".exe", StringComparison.OrdinalIgnoreCase) || string.Equals(ext, ".ico", StringComparison.OrdinalIgnoreCase);
+            return usable && File.Exists(path) ? path : null;
         }
 
         // ------------------------------------------------------------------ Helpers
@@ -257,6 +280,7 @@ namespace Vibra.Platform
                 return null;
 
             var exes = new List<(string Name, long Size)>();
+            var paths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var pending = new Stack<(string Path, int Depth)>();
             pending.Push((folder, 0));
             int visited = 0;
@@ -267,7 +291,12 @@ namespace Vibra.Platform
                 try
                 {
                     foreach (string file in Directory.EnumerateFiles(path, "*.exe"))
-                        exes.Add((Path.GetFileName(file), new FileInfo(file).Length));
+                    {
+                        string exeName = Path.GetFileName(file);
+                        exes.Add((exeName, new FileInfo(file).Length));
+                        if (!paths.ContainsKey(exeName))
+                            paths[exeName] = file;
+                    }
 
                     if (depth >= MaxFolderDepth)
                         continue;
@@ -286,7 +315,7 @@ namespace Vibra.Platform
             }
 
             var ranked = ExeFilter.RankExes(exes, name).Take(MaxExesPerGame).ToList();
-            return ranked.Count == 0 ? null : new DetectedGame(name, source, ranked);
+            return ranked.Count == 0 ? null : new DetectedGame(name, source, ranked, paths[ranked[0]]);
         }
 
         private static string ReadRegistryString(RegistryHive hive, RegistryView view, string path, string value)

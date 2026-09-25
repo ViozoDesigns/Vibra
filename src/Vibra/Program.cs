@@ -44,7 +44,8 @@ namespace Vibra
                 SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
 
                 bool startHidden = args.Any(a => string.Equals(a, "--minimized", StringComparison.OrdinalIgnoreCase));
-                using (var app = new VibraApp(startHidden))
+                bool openSettings = args.Any(a => string.Equals(a, "--settings", StringComparison.OrdinalIgnoreCase));
+                using (var app = new VibraApp(startHidden, openSettings))
                     Application.Run(app);
 
                 Log.Info("Vibra exited");

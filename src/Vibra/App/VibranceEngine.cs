@@ -42,6 +42,7 @@ namespace Vibra.App
         private List<DisplayInfo> displays = new List<DisplayInfo>();
         private List<MonitorArea> monitorAreas = new List<MonitorArea>();
         private Dictionary<string, GameProfile> live = new Dictionary<string, GameProfile>(StringComparer.OrdinalIgnoreCase);
+        private Dictionary<GameProfile, IntPtr> liveWindows = new Dictionary<GameProfile, IntPtr>();
         private GameCatalog catalog = GameCatalog.Empty;
         private string previewDisplay;
         private int previewPercent;
@@ -87,6 +88,10 @@ namespace Vibra.App
         public IReadOnlyDictionary<string, GameProfile> LiveGames => live;
 
         public bool IsLive(GameProfile game) => live.Values.Contains(game);
+
+        /// <summary>The window of a game that is on screen right now, or zero.</summary>
+        public IntPtr WindowOf(GameProfile game) =>
+            game != null && liveWindows.TryGetValue(game, out IntPtr hwnd) ? hwnd : IntPtr.Zero;
 
         public GameCatalog Catalog => catalog;
 
@@ -170,12 +175,23 @@ namespace Vibra.App
                 return;
             }
 
-            var owners = ScreenDecider.FindOwners(monitorAreas, scanner.Scan());
+            bool paused = store.Settings.Paused;
+            var gameExes = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            bool IsGameWindow(WindowInfo w)
+            {
+                if (paused || string.IsNullOrEmpty(w.ExeName))
+                    return false;
+                if (!gameExes.TryGetValue(w.ExeName, out bool isGame))
+                    gameExes[w.ExeName] = isGame = store.Settings.FindGame(w.ExeName) != null || CanAutoAdd(w.ExeName);
+                return isGame;
+            }
+
+            var owners = ScreenDecider.FindOwners(monitorAreas, scanner.Scan(), IsGameWindow);
             ownerWindows.Clear();
             foreach (var owner in owners.Values)
                 ownerWindows.Add(owner.Handle);
+            var nowLiveWindows = new Dictionary<GameProfile, IntPtr>();
 
-            bool paused = store.Settings.Paused;
             int gameCount = store.Settings.Games.Count;
             foreach (var display in displays)
             {
@@ -184,7 +200,11 @@ namespace Vibra.App
 
                 GameProfile game = null;
                 if (!paused && owners.TryGetValue(display.GdiName, out WindowInfo owner))
+                {
                     game = store.Settings.FindGame(owner.ExeName) ?? TryAutoAdd(owner.ExeName);
+                    if (game != null)
+                        nowLiveWindows[game] = owner.Handle;
+                }
 
                 int target = game?.Vibrance ?? DesktopPercent(display);
                 if (previewDisplay != null && string.Equals(previewDisplay, display.GdiName, StringComparison.OrdinalIgnoreCase))
@@ -196,21 +216,26 @@ namespace Vibra.App
                 Apply(display.GdiName, target, force: false);
             }
 
+            liveWindows = nowLiveWindows;
             SetLive(nowLive);
             if (store.Settings.Games.Count != gameCount)
                 GamesChanged?.Invoke();
         }
 
         /// <summary>A recognised game just took over a monitor for the first time: add it automatically.</summary>
-        private GameProfile TryAutoAdd(string exe)
+        private bool CanAutoAdd(string exe)
         {
             var settings = store.Settings;
-            if (settings.DisableAutoAdd || string.IsNullOrEmpty(exe) || settings.IsIgnored(exe))
+            return !settings.DisableAutoAdd && !string.IsNullOrEmpty(exe) && !settings.IsIgnored(exe) && catalog.Identify(exe) != null;
+        }
+
+        private GameProfile TryAutoAdd(string exe)
+        {
+            if (!CanAutoAdd(exe))
                 return null;
 
+            var settings = store.Settings;
             DetectedGame detected = catalog.Identify(exe);
-            if (detected == null)
-                return null;
 
             var profile = detected.ToProfile(settings.NewGameVibrance);
             profile.Exe = exe; // the executable actually running is the one to match first
@@ -381,6 +406,9 @@ namespace Vibra.App
             if (same)
                 return;
             live = nowLive;
+            Log.Info(live.Count == 0
+                ? "On screen: no games"
+                : "On screen: " + string.Join(", ", live.Select(kv => $"{kv.Value.Name} ({kv.Value.Vibrance}%) on {kv.Key} '{FindDisplay(kv.Key)?.Name}'")));
             StateChanged?.Invoke();
         }
 

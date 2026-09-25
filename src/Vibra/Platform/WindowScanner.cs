@@ -13,6 +13,7 @@ namespace Vibra.Platform
     {
         public string Exe { get; set; }
         public string Title { get; set; }
+        public IntPtr Window { get; set; }
     }
 
     /// <summary>
@@ -168,7 +169,7 @@ namespace Vibra.Platform
             string exe = processNames.Get(hwnd, pid);
             if (!IsGameCandidate(exe))
                 return null;
-            return new RunningApp { Exe = exe, Title = GetTitle(hwnd) };
+            return new RunningApp { Exe = exe, Title = GetTitle(hwnd), Window = hwnd };
         }
 
         /// <summary>Apps with a visible window, for the "Add game" menu.</summary>
@@ -195,7 +196,7 @@ namespace Vibra.Platform
                         return true;
                     string exe = processNames.Get(hwnd, pid);
                     if (IsGameCandidate(exe) && seen.Add(exe))
-                        apps.Add(new RunningApp { Exe = exe, Title = title.Trim() });
+                        apps.Add(new RunningApp { Exe = exe, Title = title.Trim(), Window = hwnd });
                 }
                 catch (Exception ex)
                 {

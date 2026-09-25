@@ -374,56 +374,6 @@ namespace Vibra.UI
         }
     }
 
-    /// <summary>Vertical list of full-width children with optional vertical scrolling.</summary>
-    internal sealed class StackPanel : Panel
-    {
-        public StackPanel()
-        {
-            DoubleBuffered = true;
-            BackColor = Theme.Background;
-        }
-
-        public int Gap { get; set; } = 8;
-
-        public int ContentHeight
-        {
-            get
-            {
-                int gap = Theme.Scale(this, Gap);
-                int total = 0;
-                int count = 0;
-                foreach (Control child in Controls)
-                {
-                    total += child.Height;
-                    count++;
-                }
-                return total + Math.Max(0, count - 1) * gap;
-            }
-        }
-
-        protected override void OnHandleCreated(EventArgs e)
-        {
-            base.OnHandleCreated(e);
-            Theme.UseDarkScrollbars(this);
-        }
-
-        protected override void OnLayout(LayoutEventArgs levent)
-        {
-            int gap = Theme.Scale(this, Gap);
-            int width = ClientSize.Width;
-            if (AutoScroll && ContentHeight > ClientSize.Height && !VerticalScroll.Visible)
-                width -= SystemInformation.VerticalScrollBarWidth;
-
-            int y = AutoScrollPosition.Y;
-            foreach (Control child in Controls)
-            {
-                child.SetBounds(0, y, Math.Max(1, width), child.Height);
-                y += child.Height + gap;
-            }
-            base.OnLayout(levent);
-        }
-    }
-
     internal sealed class FlatButton : Button
     {
         public FlatButton()

@@ -21,6 +21,10 @@ namespace Vibra.Core
         [DataMember(Order = 3)] public int Vibrance { get; set; }
         /// <summary>Other executables of the same game (e.g. DX11/DX12/Vulkan variants). May be null.</summary>
         [DataMember(Order = 4, EmitDefaultValue = false)] public List<string> OtherExes { get; set; }
+        /// <summary>Full path of a file to take the icon from (usually the game's exe). May be null.</summary>
+        [DataMember(Order = 5, EmitDefaultValue = false)] public string IconPath { get; set; }
+
+        public IEnumerable<string> AllExes => new[] { Exe }.Concat(OtherExes ?? Enumerable.Empty<string>());
 
         public bool Matches(string exe, bool exactOnly)
         {
@@ -46,7 +50,6 @@ namespace Vibra.Core
         [DataMember(Order = 1)] public List<GameProfile> Games { get; set; } = new List<GameProfile>();
         [DataMember(Order = 2)] public List<DisplayProfile> Displays { get; set; } = new List<DisplayProfile>();
         [DataMember(Order = 3)] public bool Paused { get; set; }
-        [DataMember(Order = 4)] public bool DisableHotkeys { get; set; }
         [DataMember(Order = 5)] public int HotkeyStep { get; set; } = 5;
         [DataMember(Order = 6)] public bool TrayHintShown { get; set; }
         /// <summary>Vibrance given to games that are added automatically.</summary>
@@ -54,13 +57,33 @@ namespace Vibra.Core
         [DataMember(Order = 8)] public bool DisableAutoAdd { get; set; }
         /// <summary>Executables the user removed; they are never auto-added again.</summary>
         [DataMember(Order = 9)] public List<string> IgnoredExes { get; set; } = new List<string>();
+        /// <summary>Shortcuts as text, e.g. "Ctrl+Alt+PgUp"; "None" when switched off.</summary>
+        [DataMember(Order = 10)] public string HotkeyIncrease { get; set; } = DefaultHotkeyIncrease;
+        [DataMember(Order = 11)] public string HotkeyDecrease { get; set; } = DefaultHotkeyDecrease;
+        [DataMember(Order = 12)] public string HotkeyPause { get; set; } = "None";
+
+        public const string DefaultHotkeyIncrease = "Ctrl+Alt+PgUp";
+        public const string DefaultHotkeyDecrease = "Ctrl+Alt+PgDn";
 
         public GameProfile FindGame(string exe)
         {
             if (string.IsNullOrEmpty(exe))
                 return null;
             return Games.FirstOrDefault(g => g.Matches(exe, exactOnly: true))
-                ?? Games.FirstOrDefault(g => g.Matches(exe, exactOnly: false));
+                ?? Games.FirstOrDefault(g => g.Matches(exe, exactOnly: false))
+                ?? FindByKnownGame(exe);
+        }
+
+        /// <summary>
+        /// Well-known games have several processes (e.g. League's client and the match itself);
+        /// a profile for any of them covers all of them.
+        /// </summary>
+        private GameProfile FindByKnownGame(string exe)
+        {
+            var known = KnownGames.Find(exe);
+            if (known == null)
+                return null;
+            return Games.FirstOrDefault(g => known.Exes.Any(e => g.Matches(e, exactOnly: false)));
         }
 
         public bool IsIgnored(string exe) =>
@@ -70,7 +93,7 @@ namespace Vibra.Core
         {
             if (!Games.Remove(game))
                 return;
-            foreach (string exe in new[] { game.Exe }.Concat(game.OtherExes ?? Enumerable.Empty<string>()))
+            foreach (string exe in game.AllExes)
             {
                 if (!IsIgnored(exe))
                     IgnoredExes.Add(exe);
@@ -81,7 +104,7 @@ namespace Vibra.Core
         public void AddGame(GameProfile game)
         {
             Games.Add(game);
-            var exes = new HashSet<string>(new[] { game.Exe }.Concat(game.OtherExes ?? Enumerable.Empty<string>()), StringComparer.OrdinalIgnoreCase);
+            var exes = new HashSet<string>(game.AllExes, StringComparer.OrdinalIgnoreCase);
             IgnoredExes.RemoveAll(exes.Contains);
         }
 
@@ -121,6 +144,17 @@ namespace Vibra.Core
 
             if (HotkeyStep < 1 || HotkeyStep > 25)
                 HotkeyStep = 5;
+
+            HotkeyIncrease = NormalizeHotkey(HotkeyIncrease, DefaultHotkeyIncrease);
+            HotkeyDecrease = NormalizeHotkey(HotkeyDecrease, DefaultHotkeyDecrease);
+            HotkeyPause = NormalizeHotkey(HotkeyPause, "None");
+        }
+
+        private static string NormalizeHotkey(string text, string fallback)
+        {
+            if (text == null || !Hotkey.TryParse(text, out Hotkey hotkey) || !hotkey.IsAllowed)
+                return fallback;
+            return hotkey.ToString();
         }
     }
 

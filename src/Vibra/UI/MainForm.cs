@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
@@ -15,30 +16,29 @@ namespace Vibra.UI
     {
         private readonly VibranceEngine engine;
         private readonly SettingsStore store;
-        private readonly Func<bool> hotkeysActive;
+        private readonly IconCache icons;
+        private readonly Func<string> hotkeyHint;
+        private readonly Action openSettings;
         private readonly Action requestLibraryScan;
 
         private readonly Label titleLabel = new Label();
         private readonly Label statusLabel = new Label();
+        private readonly GlyphButton settingsButton = new GlyphButton("");
         private readonly FlatButton pauseButton = new FlatButton();
         private readonly Label gamesHeader = new Label();
         private readonly FlatButton addButton = new FlatButton();
-        private readonly StackPanel gamesList = new StackPanel { AutoScroll = true };
-        private readonly Label emptyLabel = new Label();
-        private readonly Label defaultsHeader = new Label();
-        private readonly StackPanel defaultsList = new StackPanel();
-        private readonly CheckBox autostartCheck = new CheckBox();
-        private readonly CheckBox autoAddCheck = new CheckBox();
-        private readonly Label hotkeyLabel = new Label();
+        private readonly GameGrid grid;
+        private readonly GameEditor editor;
+        private readonly Label hintLabel = new Label();
+        private HashSet<GameProfile> shownGames = new HashSet<GameProfile>();
 
-        private readonly Dictionary<GameProfile, SliderRow> gameRows = new Dictionary<GameProfile, SliderRow>();
-        private SliderRow newGameRow;
-
-        public MainForm(VibranceEngine engine, SettingsStore store, Func<bool> hotkeysActive, Action requestLibraryScan)
+        public MainForm(VibranceEngine engine, SettingsStore store, IconCache icons, Func<string> hotkeyHint, Action openSettings, Action requestLibraryScan)
         {
             this.engine = engine;
             this.store = store;
-            this.hotkeysActive = hotkeysActive;
+            this.icons = icons;
+            this.hotkeyHint = hotkeyHint;
+            this.openSettings = openSettings;
             this.requestLibraryScan = requestLibraryScan;
 
             SuspendLayout();
@@ -50,8 +50,8 @@ namespace Vibra.UI
             Font = Theme.Body;
             StartPosition = FormStartPosition.CenterScreen;
             MaximizeBox = false;
-            ClientSize = new Size(S(540), S(660));
-            MinimumSize = SizeFromClientSize(new Size(S(460), S(520)));
+            ClientSize = new Size(S(560), S(640));
+            MinimumSize = SizeFromClientSize(new Size(S(420), S(460)));
 
             titleLabel.Text = "Vibra";
             titleLabel.Font = Theme.Title;
@@ -61,57 +61,60 @@ namespace Vibra.UI
             statusLabel.AutoEllipsis = true;
             statusLabel.ForeColor = Theme.SubText;
 
+            settingsButton.Font = new Font("Segoe MDL2 Assets", 12f);
+            settingsButton.BackColor = Theme.Background;
+            settingsButton.Click += (s, e) => openSettings();
+            new ToolTip().SetToolTip(settingsButton, "Settings");
+
             pauseButton.Click += (s, e) => engine.SetPaused(!engine.IsPaused);
 
-            SetupSectionLabel(gamesHeader, "GAMES");
+            gamesHeader.Text = "GAMES";
+            gamesHeader.Font = Theme.Section;
+            gamesHeader.ForeColor = Theme.SubText;
+            gamesHeader.AutoSize = true;
+
             addButton.Text = "+  Add game";
             addButton.Click += (s, e) => ShowAddMenu();
 
-            emptyLabel.Text = "No games yet.\nStart a game and it will be added automatically, pick one from \"+ Add game\",\nor press Ctrl+Alt+PgUp while playing.";
-            emptyLabel.ForeColor = Theme.SubText;
-            emptyLabel.TextAlign = ContentAlignment.MiddleCenter;
-            emptyLabel.Height = S(90);
-
-            SetupSectionLabel(defaultsHeader, "DEFAULTS");
-
-            SetupCheck(autostartCheck, "Start with Windows");
-            autostartCheck.Checked = Autostart.IsEnabled;
-            autostartCheck.CheckedChanged += OnAutostartChanged;
-
-            SetupCheck(autoAddCheck, "Auto-add games when they start");
-            autoAddCheck.Checked = !store.Settings.DisableAutoAdd;
-            autoAddCheck.CheckedChanged += (s, e) =>
+            grid = new GameGrid(icons)
             {
-                store.Settings.DisableAutoAdd = !autoAddCheck.Checked;
-                store.SaveSoon();
+                EmptyText = "No games yet.\n\nStart a game and it's added automatically,\npick one from \"+ Add game\", or press your shortcut while playing.",
+            };
+            grid.SelectedChanged += (s, e) => editor.Game = grid.Selected;
+            grid.ContextRequested += ShowTileMenu;
+            grid.RemoveRequested += game => Defer(() => RemoveGame(game));
+
+            editor = new GameEditor(icons);
+            editor.VibranceChanged += OnEditorVibranceChanged;
+            editor.RemoveClicked += (s, e) =>
+            {
+                var game = editor.Game;
+                if (game != null)
+                    Defer(() => RemoveGame(game));
             };
 
-            hotkeyLabel.AutoSize = true;
-            hotkeyLabel.ForeColor = Theme.SubText;
-            hotkeyLabel.Font = Theme.Small;
+            hintLabel.AutoSize = false;
+            hintLabel.AutoEllipsis = true;
+            hintLabel.ForeColor = Theme.SubText;
+            hintLabel.Font = Theme.Small;
 
-            Controls.AddRange(new Control[]
-            {
-                titleLabel, statusLabel, pauseButton, gamesHeader, addButton, gamesList,
-                defaultsHeader, defaultsList, autoAddCheck, autostartCheck, hotkeyLabel,
-            });
+            Controls.AddRange(new Control[] { titleLabel, statusLabel, settingsButton, pauseButton, gamesHeader, addButton, grid, editor, hintLabel });
             ResumeLayout(false);
 
             engine.StateChanged += OnEngineStateChanged;
             engine.GamesChanged += OnGamesChanged;
             engine.GameAdjusted += OnGameAdjusted;
-            engine.DisplaysChanged += OnDisplaysChanged;
+            icons.Changed += OnIconsChanged;
 
             RebuildGames();
-            RebuildDefaults();
             RefreshStatus();
         }
 
         private int S(int px) => Theme.Scale(this, px);
 
         /// <summary>
-        /// Runs after the current event finishes. Rows are rebuilt this way so a control is never
-        /// disposed while one of its own event handlers is still on the stack.
+        /// Runs after the current event finishes, so a control is never changed or removed while one
+        /// of its own event handlers is still running.
         /// </summary>
         private void Defer(Action action)
         {
@@ -121,14 +124,18 @@ namespace Vibra.UI
                 action();
         }
 
-        private void OnGamesChanged() => Defer(RebuildGames);
-
-        private void OnDisplaysChanged() => Defer(RebuildDefaults);
-
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
             Theme.UseDarkTitleBar(Handle);
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            var area = Screen.FromControl(this).WorkingArea;
+            if (Height > area.Height * 0.92)
+                Height = (int)(area.Height * 0.92);
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
@@ -137,7 +144,6 @@ namespace Vibra.UI
             {
                 // Closing the window keeps Vibra running in the tray.
                 e.Cancel = true;
-                engine.ClearPreview();
                 Hide();
                 HiddenToTray?.Invoke();
                 return;
@@ -154,7 +160,7 @@ namespace Vibra.UI
                 engine.StateChanged -= OnEngineStateChanged;
                 engine.GamesChanged -= OnGamesChanged;
                 engine.GameAdjusted -= OnGameAdjusted;
-                engine.DisplaysChanged -= OnDisplaysChanged;
+                icons.Changed -= OnIconsChanged;
             }
             base.Dispose(disposing);
         }
@@ -171,132 +177,111 @@ namespace Vibra.UI
             int width = ClientSize.Width - pad * 2;
             int y = S(16);
 
-            var pauseSize = new Size(S(96), S(32));
+            var pauseSize = new Size(S(92), S(32));
+            int gear = S(32);
             titleLabel.Location = new Point(pad - S(2), y);
             pauseButton.Bounds = new Rectangle(pad + width - pauseSize.Width, y + S(6), pauseSize.Width, pauseSize.Height);
+            settingsButton.Bounds = new Rectangle(pauseButton.Left - gear - S(6), y + S(6), gear, gear);
             y += titleLabel.Height + S(2);
-            statusLabel.Bounds = new Rectangle(pad, y, width - pauseSize.Width - S(12), S(20));
-            y += statusLabel.Height + S(20);
+            statusLabel.Bounds = new Rectangle(pad, y, width, S(20));
+            y += statusLabel.Height + S(18);
 
             var addSize = new Size(S(124), S(32));
             addButton.Bounds = new Rectangle(pad + width - addSize.Width, y, addSize.Width, addSize.Height);
             gamesHeader.Location = new Point(pad, y + (addSize.Height - gamesHeader.Height) / 2);
             y += addSize.Height + S(10);
 
-            // Bottom-up: footer, then defaults, then the games list takes what is left.
-            int bottom = ClientSize.Height - S(16);
-            hotkeyLabel.Location = new Point(pad, bottom - hotkeyLabel.Height);
-            bottom = hotkeyLabel.Top - S(10);
-            autostartCheck.Bounds = new Rectangle(pad, bottom - S(24), width / 2, S(24));
-            autoAddCheck.Bounds = new Rectangle(pad + width / 2, bottom - S(24), width / 2, S(24));
-            bottom = autostartCheck.Top - S(14);
+            int bottom = ClientSize.Height - S(12);
+            hintLabel.Bounds = new Rectangle(pad, bottom - S(18), width, S(18));
+            bottom = hintLabel.Top - S(10);
+            editor.Bounds = new Rectangle(pad, bottom - editor.PreferredHeight, width, editor.PreferredHeight);
+            bottom = editor.Top - S(12);
 
-            int defaultsHeight = defaultsList.ContentHeight;
-            defaultsList.Bounds = new Rectangle(pad, bottom - defaultsHeight, width, defaultsHeight);
-            bottom = defaultsList.Top - S(10);
-            defaultsHeader.Location = new Point(pad, bottom - defaultsHeader.Height);
-            bottom = defaultsHeader.Top - S(18);
-
-            gamesList.Bounds = new Rectangle(pad, y, width, Math.Max(S(60), bottom - y));
+            grid.Bounds = new Rectangle(pad, y, width, Math.Max(S(80), bottom - y));
         }
 
         // ------------------------------------------------------------------ Games
 
+        private List<GameProfile> SortedGames() =>
+            store.Settings.Games.OrderBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+
         private void RebuildGames()
         {
-            gamesList.SuspendLayout();
-            foreach (var row in gameRows.Values)
-                row.Dispose();
-            gameRows.Clear();
-            gamesList.Controls.Clear();
-
-            var games = store.Settings.Games;
-            if (games.Count == 0)
-            {
-                gamesList.Controls.Add(emptyLabel);
-            }
-            else
-            {
-                foreach (var game in games.OrderBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase))
-                {
-                    var row = CreateGameRow(game);
-                    gameRows[game] = row;
-                    gamesList.Controls.Add(row);
-                }
-            }
-            gamesList.ResumeLayout(true);
-            UpdateLiveIndicators();
+            var previous = grid.Selected;
+            shownGames = new HashSet<GameProfile>(store.Settings.Games);
+            grid.SetGames(SortedGames(), engine.IsLive);
+            if (grid.Selected == null || !store.Settings.Games.Contains(grid.Selected))
+                grid.Selected = PreferredSelection(previous);
+            editor.Game = grid.Selected;
             RefreshStatus();
         }
 
-        private SliderRow CreateGameRow(GameProfile game)
+        private GameProfile PreferredSelection(GameProfile previous)
         {
-            var row = new SliderRow(removable: true) { Title = game.Name };
-            row.Slider.Value = game.Vibrance;
-            row.Slider.ValueChanged += (s, e) =>
-            {
-                game.Vibrance = row.Slider.Value;
-                store.SaveSoon();
-                if (row.Slider.IsDragging && !engine.IsLive(game))
-                    PreviewHere(game.Vibrance);
-                else
-                    engine.Evaluate();
-            };
-            row.Slider.DragStarted += (s, e) =>
-            {
-                if (!engine.IsLive(game))
-                    PreviewHere(row.Slider.Value);
-            };
-            row.Slider.DragCompleted += (s, e) => engine.ClearPreview();
-            row.RemoveClicked += (s, e) => Defer(() =>
-            {
-                store.Settings.RemoveGame(game);
-                store.SaveSoon();
-                RebuildGames();
-                engine.Evaluate();
-            });
-            return row;
+            var games = store.Settings.Games;
+            if (previous != null && games.Contains(previous))
+                return previous;
+            return engine.LiveGames.Values.FirstOrDefault() ?? SortedGames().FirstOrDefault();
         }
 
-        /// <summary>Show a value on the monitor this window is on, so you can judge it without the game running.</summary>
-        private void PreviewHere(int percent)
+        private void OnGamesChanged() => Defer(() =>
         {
-            string gdi = engine.DisplayForWindow(Handle);
-            if (gdi != null)
-                engine.SetPreview(gdi, percent);
-        }
+            // A game that was just added (hotkey or auto-detect) is almost always the one on screen: show it.
+            var added = store.Settings.Games.FirstOrDefault(g => !shownGames.Contains(g));
+            RebuildGames();
+            if (added != null)
+                grid.Selected = added;
+        });
 
         private void OnGameAdjusted(GameProfile game)
         {
-            if (gameRows.TryGetValue(game, out var row))
-                row.Slider.Value = game.Vibrance;
+            grid.RefreshTiles();
+            if (ReferenceEquals(editor.Game, game))
+                editor.RefreshValue();
         }
 
-        private void UpdateLiveIndicators()
+        private void OnIconsChanged()
         {
-            var live = engine.LiveGames;
-            foreach (var pair in gameRows)
-            {
-                var entry = live.FirstOrDefault(kv => ReferenceEquals(kv.Value, pair.Key));
-                bool isLive = entry.Value != null;
-                pair.Value.Live = isLive;
-                pair.Value.Subtitle = isLive
-                    ? $"On screen · {engine.FindDisplay(entry.Key)?.Name ?? entry.Key}"
-                    : pair.Key.Exe;
-            }
+            grid.RefreshTiles();
+            editor.Invalidate();
+        }
+
+        private void OnEditorVibranceChanged(object sender, EventArgs e)
+        {
+            // Only ever changes the monitor the game is actually on (nothing happens if it isn't on screen).
+            store.SaveSoon();
+            engine.Evaluate();
+            grid.RefreshTiles();
+        }
+
+        private void RemoveGame(GameProfile game)
+        {
+            store.Settings.RemoveGame(game);
+            store.SaveSoon();
+            RebuildGames();
+            engine.Evaluate();
+        }
+
+        private void ShowTileMenu(GameProfile game, Point location)
+        {
+            var menu = CreateMenu();
+            AddItem(menu.Items, $"Remove {game.Name}", null, () => RemoveGame(game));
+            menu.Closed += (s, e) => BeginInvoke(new Action(menu.Dispose));
+            menu.Show(grid, location);
         }
 
         // ------------------------------------------------------------------ Add menu
 
+        private ContextMenuStrip CreateMenu() => new ContextMenuStrip
+        {
+            Renderer = new DarkMenuRenderer(),
+            ShowImageMargin = false,
+            Font = Theme.Body,
+        };
+
         private void ShowAddMenu()
         {
-            var menu = new ContextMenuStrip
-            {
-                Renderer = new DarkMenuRenderer(),
-                ShowImageMargin = false,
-                Font = Theme.Body,
-            };
-
+            var menu = CreateMenu();
             var settings = store.Settings;
             var catalog = engine.Catalog;
             var running = engine.ListRunningApps().Where(a => settings.FindGame(a.Exe) == null).ToList();
@@ -315,7 +300,7 @@ namespace Vibra.UI
                         var profile = detected.ToProfile(settings.NewGameVibrance);
                         profile.Exe = app.Exe;
                         profile.OtherExes = detected.Exes.Where(e => !string.Equals(e, app.Exe, StringComparison.OrdinalIgnoreCase)).ToList();
-                        AddGame(profile);
+                        AddGame(profile, app.Window);
                     });
                 }
             }
@@ -327,12 +312,12 @@ namespace Vibra.UI
                 AddHeader(menu, "Installed");
                 const int inline = 12;
                 foreach (var game in installed.Take(inline))
-                    AddItem(menu.Items, game.Name, game.Source, () => AddGame(game.ToProfile(settings.NewGameVibrance)));
+                    AddItem(menu.Items, game.Name, game.Source, () => AddGame(game.ToProfile(settings.NewGameVibrance), IntPtr.Zero));
                 if (installed.Count > inline)
                 {
                     var more = new ToolStripMenuItem($"More installed games ({installed.Count - inline})");
                     foreach (var game in installed.Skip(inline))
-                        AddItem(more.DropDownItems, game.Name, game.Source, () => AddGame(game.ToProfile(settings.NewGameVibrance)));
+                        AddItem(more.DropDownItems, game.Name, game.Source, () => AddGame(game.ToProfile(settings.NewGameVibrance), IntPtr.Zero));
                     StyleDropDown(more);
                     menu.Items.Add(more);
                 }
@@ -360,7 +345,7 @@ namespace Vibra.UI
                         Exe = app.Exe,
                         Name = app.Title.Length > 40 ? GameMatcher.DisplayNameFor(app.Exe) : app.Title,
                         Vibrance = settings.NewGameVibrance,
-                    }));
+                    }, app.Window));
                 }
                 StyleDropDown(other);
                 menu.Items.Add(other);
@@ -395,7 +380,7 @@ namespace Vibra.UI
                 dropDown.ShowImageMargin = false;
         }
 
-        private void AddGame(GameProfile profile)
+        private void AddGame(GameProfile profile, IntPtr window)
         {
             if (profile?.Exe == null || store.Settings.FindGame(profile.Exe) != null)
                 return;
@@ -403,7 +388,10 @@ namespace Vibra.UI
                 profile.OtherExes = null;
             store.Settings.AddGame(profile);
             store.SaveSoon();
+            if (window != IntPtr.Zero)
+                icons.CaptureFromWindow(profile, window);
             RebuildGames();
+            grid.Selected = profile;
             engine.Evaluate();
         }
 
@@ -428,7 +416,8 @@ namespace Vibra.UI
                     OtherExes = detected?.Exes.Where(e => !string.Equals(e, exe, StringComparison.OrdinalIgnoreCase)).ToList(),
                     Name = name,
                     Vibrance = store.Settings.NewGameVibrance,
-                });
+                    IconPath = dialog.FileName,
+                }, IntPtr.Zero);
             }
         }
 
@@ -446,90 +435,24 @@ namespace Vibra.UI
             }
         }
 
-        // ------------------------------------------------------------------ Defaults (desktop per monitor + new games)
-
-        private void RebuildDefaults()
-        {
-            defaultsList.SuspendLayout();
-            foreach (Control control in defaultsList.Controls.Cast<Control>().ToList())
-                control.Dispose();
-            defaultsList.Controls.Clear();
-
-            foreach (var display in engine.Displays)
-                defaultsList.Controls.Add(CreateDisplayRow(display));
-
-            newGameRow = new SliderRow(removable: false)
-            {
-                Title = "New games",
-                Subtitle = "Level for games added automatically",
-            };
-            newGameRow.Slider.Value = store.Settings.NewGameVibrance;
-            newGameRow.Slider.ValueChanged += (s, e) =>
-            {
-                store.Settings.NewGameVibrance = newGameRow.Slider.Value;
-                store.SaveSoon();
-                if (newGameRow.Slider.IsDragging)
-                    PreviewHere(newGameRow.Slider.Value);
-            };
-            newGameRow.Slider.DragStarted += (s, e) => PreviewHere(newGameRow.Slider.Value);
-            newGameRow.Slider.DragCompleted += (s, e) => engine.ClearPreview();
-            defaultsList.Controls.Add(newGameRow);
-
-            defaultsList.ResumeLayout(true);
-            PerformLayout();
-        }
-
-        private SliderRow CreateDisplayRow(DisplayInfo display)
-        {
-            bool supported = engine.Supports(display);
-            var parts = new List<string> { "Desktop", $"{display.Bounds.Width}×{display.Bounds.Height}" };
-            if (display.IsPrimary)
-                parts.Add("main");
-            var row = new SliderRow(removable: false)
-            {
-                Title = display.Name,
-                Subtitle = supported ? string.Join(" · ", parts) : "Not driven by the NVIDIA GPU",
-            };
-            row.Slider.Value = engine.DesktopPercent(display);
-            row.Slider.Enabled = supported;
-            row.Slider.ValueChanged += (s, e) =>
-            {
-                var profile = store.Settings.FindDisplay(display.Id);
-                if (profile == null)
-                    return;
-                profile.Vibrance = row.Slider.Value;
-                store.SaveSoon();
-                if (row.Slider.IsDragging)
-                    engine.SetPreview(display.GdiName, row.Slider.Value);
-                else
-                    engine.Evaluate();
-            };
-            row.Slider.DragStarted += (s, e) => engine.SetPreview(display.GdiName, row.Slider.Value);
-            row.Slider.DragCompleted += (s, e) => engine.ClearPreview();
-            return row;
-        }
-
         // ------------------------------------------------------------------ Status
 
         private void OnEngineStateChanged()
         {
-            UpdateLiveIndicators();
+            grid.RefreshTiles();
+            editor.RefreshState(engine);
             RefreshStatus();
         }
 
         public void RefreshStatus()
         {
             pauseButton.Text = engine.IsPaused ? "Resume" : "Pause";
-            hotkeyLabel.Text = hotkeysActive()
-                ? "In game: Ctrl+Alt+PgUp / PgDn to tune (adds the game if new)"
-                : "In-game hotkeys unavailable (Ctrl+Alt+PgUp/PgDn is taken by another app)";
-
-            statusLabel.ForeColor = Theme.SubText;
+            hintLabel.Text = hotkeyHint();
             statusLabel.Text = StatusText(engine, store.Settings, out bool warning);
-            if (warning)
-                statusLabel.ForeColor = Theme.Warning;
-            else if (engine.LiveGames.Count > 0 && !engine.IsPaused)
-                statusLabel.ForeColor = Theme.Live;
+            statusLabel.ForeColor = warning ? Theme.Warning
+                : engine.LiveGames.Count > 0 && !engine.IsPaused ? Theme.Live
+                : Theme.SubText;
+            editor.RefreshState(engine);
         }
 
         public static string StatusText(VibranceEngine engine, AppSettings settings, out bool warning)
@@ -552,42 +475,140 @@ namespace Vibra.UI
             int count = settings.Games.Count;
             return count == 0 ? "Ready · waiting for a game" : $"Ready · {count} game{(count == 1 ? "" : "s")}";
         }
+    }
 
-        // ------------------------------------------------------------------ Helpers
+    /// <summary>Bottom panel for the selected game: icon, name, where it is, slider, remove.</summary>
+    internal sealed class GameEditor : Control
+    {
+        private readonly IconCache icons;
+        private readonly FlatButton removeButton = new FlatButton();
+        private GameProfile game;
+        private string subtitle = string.Empty;
+        private bool live;
+        private bool loading;
 
-        private void OnAutostartChanged(object sender, EventArgs e)
+        public GameEditor(IconCache icons)
         {
-            try
+            this.icons = icons;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+            BackColor = Theme.Background;
+
+            Slider = new VibranceSlider { BackColor = Theme.Surface };
+            Slider.ValueChanged += (s, e) =>
             {
-                Autostart.Set(autostartCheck.Checked);
-            }
-            catch (Exception ex)
+                Invalidate();
+                if (loading || game == null)
+                    return;
+                game.Vibrance = Slider.Value;
+                VibranceChanged?.Invoke(this, EventArgs.Empty);
+            };
+            Controls.Add(Slider);
+
+            removeButton.Text = "Remove";
+            removeButton.Font = Theme.Body;
+            removeButton.BackColor = Theme.Surface;
+            removeButton.Click += (s, e) => RemoveClicked?.Invoke(this, EventArgs.Empty);
+            Controls.Add(removeButton);
+        }
+
+        public event EventHandler VibranceChanged;
+        public event EventHandler RemoveClicked;
+
+        public VibranceSlider Slider { get; }
+
+        public int PreferredHeight => Theme.Scale(this, 112);
+
+        public GameProfile Game
+        {
+            get => game;
+            set
             {
-                Log.Error("Could not change autostart", ex);
-                MessageBox.Show(this, "Windows did not allow changing the startup setting.", "Vibra", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                autostartCheck.CheckedChanged -= OnAutostartChanged;
-                autostartCheck.Checked = Autostart.IsEnabled;
-                autostartCheck.CheckedChanged += OnAutostartChanged;
+                game = value;
+                Slider.Enabled = removeButton.Enabled = game != null;
+                RefreshValue();
+                Invalidate();
             }
         }
 
-        private static void SetupSectionLabel(Label label, string text)
+        public void RefreshValue()
         {
-            label.Text = text;
-            label.Font = Theme.Section;
-            label.ForeColor = Theme.SubText;
-            label.AutoSize = true;
+            loading = true;
+            Slider.Value = game?.Vibrance ?? VibranceScale.MinPercent;
+            loading = false;
+            Invalidate();
         }
 
-        private static void SetupCheck(CheckBox check, string text)
+        public void RefreshState(VibranceEngine engine)
         {
-            check.Text = text;
-            check.ForeColor = Theme.Text;
-            check.FlatStyle = FlatStyle.Flat;
-            check.FlatAppearance.BorderColor = Theme.Border;
-            check.FlatAppearance.CheckedBackColor = Theme.GradientMid;
-            check.FlatAppearance.MouseOverBackColor = Theme.SurfaceHover;
-            check.Cursor = Cursors.Hand;
+            var entry = engine.LiveGames.FirstOrDefault(kv => ReferenceEquals(kv.Value, game));
+            live = game != null && entry.Value != null && !engine.IsPaused;
+            if (game == null)
+                subtitle = string.Empty;
+            else if (live)
+                subtitle = $"On screen · {engine.FindDisplay(entry.Key)?.Name ?? entry.Key}";
+            else
+                subtitle = $"Not on screen · changes apply when {game.Name} is";
+            Invalidate();
+        }
+
+        private int S(int px) => Theme.Scale(this, px);
+
+        protected override void OnLayout(LayoutEventArgs levent)
+        {
+            base.OnLayout(levent);
+            int pad = S(16);
+            var buttonSize = new Size(S(84), S(30));
+            removeButton.Bounds = new Rectangle(Width - pad - buttonSize.Width, pad, buttonSize.Width, buttonSize.Height);
+            int sliderTop = S(70);
+            Slider.SetBounds(pad - S(6), sliderTop, Width - pad * 2 - S(52) + S(6), S(26));
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.Clear(BackColor);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+
+            using (var path = Theme.RoundedRect(new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), S(12)))
+            using (var brush = new SolidBrush(Theme.Surface))
+                g.FillPath(brush, path);
+
+            int pad = S(16);
+            if (game == null)
+            {
+                TextRenderer.DrawText(g, "Select a game to change its vibrance", Theme.Body, ClientRectangle, Theme.SubText,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                return;
+            }
+
+            int iconSize = S(40);
+            var iconRect = new Rectangle(pad, pad, iconSize, iconSize);
+            var icon = icons.Get(game);
+            if (icon != null)
+                g.DrawImage(icon, iconRect);
+            else
+                IconCache.DrawPlaceholder(g, iconRect, game.Name);
+
+            int textLeft = iconRect.Right + S(12);
+            int textWidth = Math.Max(1, removeButton.Left - S(8) - textLeft);
+            const TextFormatFlags flags = TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine;
+            TextRenderer.DrawText(g, game.Name, Theme.Value, new Rectangle(textLeft, pad - S(1), textWidth, S(22)), Theme.Text, flags);
+
+            int subtitleLeft = textLeft;
+            if (live)
+            {
+                int dot = S(7);
+                using (var brush = new SolidBrush(Theme.Live))
+                    g.FillEllipse(brush, textLeft, pad + S(28), dot, dot);
+                subtitleLeft += dot + S(6);
+            }
+            TextRenderer.DrawText(g, subtitle, Theme.Small, new Rectangle(subtitleLeft, pad + S(22), Math.Max(1, textWidth - (subtitleLeft - textLeft)), S(18)),
+                live ? Theme.Live : Theme.SubText, flags);
+
+            var valueRect = new Rectangle(Slider.Right, Slider.Top, Width - pad - Slider.Right, Slider.Height);
+            TextRenderer.DrawText(g, $"{Slider.Value}%", Theme.Value, valueRect, Theme.Text,
+                TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
         }
     }
 }
