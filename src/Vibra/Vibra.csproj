@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- .NET Framework 4.8 ships with Windows 10/11, so Vibra needs no runtime install. -->
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>Vibra</RootNamespace>
+    <AssemblyName>Vibra</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\Vibra.ico</ApplicationIcon>
+    <DebugType>embedded</DebugType>
+    <Version>0.1.0</Version>
+    <Product>Vibra</Product>
+    <Title>Vibra</Title>
+    <Description>Per-game digital vibrance</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Runtime.Serialization" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\Vibra.ico" LogicalName="Vibra.ico" />
+  </ItemGroup>
+
+</Project>

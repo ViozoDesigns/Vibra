@@ -1,0 +1,41 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Unit tests
+        run: dotnet test tests/Vibra.Tests/Vibra.Tests.csproj -c Release
+
+      - name: Build Vibra.exe
+        run: dotnet build src/Vibra/Vibra.csproj -c Release -o out
+
+      - name: Smoke test (starts, runs 15 s, no errors logged)
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:APPDATA 'Vibra\vibra.log'
+          $p = Start-Process -FilePath out\Vibra.exe -ArgumentList '--minimized' -PassThru
+          Start-Sleep -Seconds 15
+          $exited = $p.HasExited
+          if (-not $exited) { Stop-Process -Id $p.Id -Force }
+          if (Test-Path $log) { Get-Content $log } else { Write-Host 'No log written' }
+          if ($exited) { throw "Vibra exited early (code $($p.ExitCode))" }
+          if ((Test-Path $log) -and (Select-String -Path $log -Pattern '\[ERROR\]' -Quiet)) { throw 'Errors were logged' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vibra
+          path: |
+            out/Vibra.exe
+            out/Vibra.exe.config
