@@ -117,15 +117,34 @@ namespace Vibra.UI
                         g.FillPath(glow, path);
                 }
 
-                string number = display.Number > 0 ? display.Number.ToString() : "?";
-                string caption = isSupported ? $"{levelOf(display)}%" : "n/a";
-                var numberRect = new RectangleF(rect.X, rect.Y, rect.Width, rect.Height * 0.62f);
-                var captionRect = new RectangleF(rect.X, rect.Y + rect.Height * 0.55f, rect.Width, rect.Height * 0.35f);
-                TextRenderer.DrawText(g, number, Theme.Title, Rectangle.Round(numberRect), isSupported ? Theme.Text : Theme.SubText,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.Bottom | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
-                TextRenderer.DrawText(g, caption, Theme.Small, Rectangle.Round(captionRect), Theme.SubText,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+                DrawLabels(g, rect, display.Number > 0 ? display.Number.ToString() : "?",
+                    isSupported ? $"{levelOf(display)}%" : "n/a", isSupported);
             }
+        }
+
+        /// <summary>Monitor number above its level, centred as one block so they never overlap.</summary>
+        private void DrawLabels(Graphics g, RectangleF rect, string number, string caption, bool isSupported)
+        {
+            const TextFormatFlags flags = TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine;
+            var numberFont = rect.Height >= Theme.Scale(this, 70) ? Theme.Title : Theme.Value;
+            Size numberSize = TextRenderer.MeasureText(g, number, numberFont, Size.Empty, flags);
+            Size captionSize = TextRenderer.MeasureText(g, caption, Theme.Small, Size.Empty, flags);
+            int gap = Theme.Scale(this, 2);
+            var bounds = Rectangle.Round(rect);
+
+            if (numberSize.Height + gap + captionSize.Height > bounds.Height - Theme.Scale(this, 8))
+            {
+                // Too flat for two lines: "2 · 70%" on one line.
+                TextRenderer.DrawText(g, $"{number} · {caption}", Theme.Small, bounds, isSupported ? Theme.Text : Theme.SubText,
+                    flags | TextFormatFlags.VerticalCenter);
+                return;
+            }
+
+            int top = bounds.Y + (bounds.Height - numberSize.Height - gap - captionSize.Height) / 2;
+            TextRenderer.DrawText(g, number, numberFont, new Rectangle(bounds.X, top, bounds.Width, numberSize.Height),
+                isSupported ? Theme.Text : Theme.SubText, flags);
+            TextRenderer.DrawText(g, caption, Theme.Small, new Rectangle(bounds.X, top + numberSize.Height + gap, bounds.Width, captionSize.Height),
+                Theme.SubText, flags);
         }
 
         private DisplayInfo HitTest(Point point) =>

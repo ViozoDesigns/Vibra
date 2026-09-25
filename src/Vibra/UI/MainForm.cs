@@ -99,6 +99,10 @@ namespace Vibra.UI
             hintLabel.Font = Theme.Small;
 
             Controls.AddRange(new Control[] { titleLabel, statusLabel, settingsButton, pauseButton, gamesHeader, addButton, grid, editor, hintLabel });
+            // Buttons always paint above the labels next to them.
+            settingsButton.BringToFront();
+            pauseButton.BringToFront();
+            addButton.BringToFront();
             ResumeLayout(false);
 
             engine.StateChanged += OnEngineStateChanged;
@@ -183,7 +187,8 @@ namespace Vibra.UI
             pauseButton.Bounds = new Rectangle(pad + width - pauseSize.Width, y + S(6), pauseSize.Width, pauseSize.Height);
             settingsButton.Bounds = new Rectangle(pauseButton.Left - gear - S(6), y + S(6), gear, gear);
             y += titleLabel.Height + S(2);
-            statusLabel.Bounds = new Rectangle(pad, y, width, S(20));
+            // Stop short of the gear/Pause buttons: the label would otherwise paint over their lower edge.
+            statusLabel.Bounds = new Rectangle(pad, y, Math.Max(S(40), settingsButton.Left - S(12) - pad), S(20));
             y += statusLabel.Height + S(18);
 
             var addSize = new Size(S(124), S(32));
