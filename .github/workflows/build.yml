@@ -21,14 +21,22 @@ jobs:
       - name: Build Vibra.exe
         run: dotnet build src/Vibra/Vibra.csproj -c Release -o out
 
-      - name: Smoke test (starts, runs 15 s, no errors logged)
+      - name: Smoke test (opens the window, runs 15 s, no errors logged)
         shell: pwsh
         run: |
           $log = Join-Path $env:APPDATA 'Vibra\vibra.log'
-          $p = Start-Process -FilePath out\Vibra.exe -ArgumentList '--minimized' -PassThru
+          $p = Start-Process -FilePath out\Vibra.exe -PassThru
           Start-Sleep -Seconds 15
           $exited = $p.HasExited
-          if (-not $exited) { Stop-Process -Id $p.Id -Force }
+          if (-not $exited) {
+            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+            $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+            $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+            $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+            $bitmap.Save("$PWD\screenshot.png", [System.Drawing.Imaging.ImageFormat]::Png)
+            Stop-Process -Id $p.Id -Force
+          }
           if (Test-Path $log) { Get-Content $log } else { Write-Host 'No log written' }
           if ($exited) { throw "Vibra exited early (code $($p.ExitCode))" }
           if ((Test-Path $log) -and (Select-String -Path $log -Pattern '\[ERROR\]' -Quiet)) { throw 'Errors were logged' }
@@ -39,3 +47,10 @@ jobs:
           path: |
             out/Vibra.exe
             out/Vibra.exe.config
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshot
+          path: screenshot.png
+          if-no-files-found: ignore
