@@ -29,6 +29,18 @@ jobs:
           Start-Sleep -Seconds 15
           $exited = $p.HasExited
           if (-not $exited) {
+            # Print the window's control layout, so layout problems are visible in the log.
+            Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+            $A = [System.Windows.Automation.AutomationElement]
+            $byPid = New-Object System.Windows.Automation.PropertyCondition($A::ProcessIdProperty, $p.Id)
+            $window = $A::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children, $byPid)
+            if ($window) {
+              Write-Host "Window: $($window.Current.Name) $($window.Current.BoundingRectangle)"
+              foreach ($e in $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
+                Write-Host ("  {0,-10} {1,-34} {2}" -f $e.Current.ControlType.ProgrammaticName.Replace('ControlType.', ''), $e.Current.Name, $e.Current.BoundingRectangle)
+              }
+            } else { throw 'Vibra window not found' }
+
             Add-Type -AssemblyName System.Windows.Forms, System.Drawing
             $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
             $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
